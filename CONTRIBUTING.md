@@ -76,6 +76,14 @@ npm install
 # Copy environment template
 cp .env.example .env
 
+# ── Run contributor diagnostics before starting ─────────────────────────────
+# Checks your tools, environment variables, database, Redis, and external
+# services. Always run this after cloning or updating your .env.
+npm run diagnostics
+
+# For a faster check that skips network probes:
+npm run diagnostics:quick
+
 # Start development server
 npm run start:dev
 
@@ -85,6 +93,62 @@ npm run test
 # Run linting
 npm run lint
 ```
+
+### Environment Configuration
+
+The API validates all required secrets at startup. Invalid or placeholder values
+cause a fast-fail with an actionable error message. See [.env.example](.env.example)
+for the full list of supported variables.
+
+**Required for core functionality:**
+- `DATABASE_URL` — PostgreSQL connection string
+- `JWT_SECRET` — 32+ character random string (generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
+
+**Required for specific features:**
+- `REDIS_URL` — Redis URL for rate limiting, caching, and Bull queues
+- `STELLAR_HORIZON_URL` + `STELLAR_SIGNING_SECRET` — Stellar payment integration
+- `OPENAI_API_KEY` — AI compute features
+- `SMTP_HOST` + `SMTP_*` — Email notifications
+
+Production deployments additionally validate that secrets are not placeholders
+and that localhost URLs are not used.
+
+### API Versioning
+
+All routes are served under `/api/v1/...` by default. Version 2 routes
+(when introduced) are accessible at `/api/v2/...`. Deprecated routes will
+carry `Deprecation` and `Sunset` HTTP headers pointing to migration guides.
+
+### Quota Management
+
+Expensive operations (AI token usage, oracle submissions, file uploads, compute
+jobs) enforce per-user budget quotas. Administrators can inspect and reset
+quotas via:
+- `GET /api/v1/admin/quota/policies` — list all quota policies
+- `GET /api/v1/admin/quota/usage/:resource` — per-actor usage for a resource
+- `GET /api/v1/admin/quota/peek?actor=…&resource=…` — inspect a specific actor
+- `DELETE /api/v1/admin/quota/reset?actor=…&resource=…` — reset an actor's quota
+
+All admin quota endpoints require the `ADMIN` role.
+
+### Diagnostics Command
+
+Run `npm run diagnostics` at any time to verify your local setup:
+
+| Section | What it checks |
+|---|---|
+| Required tools | node ≥ 18, npm, git, docker (optional), psql (optional) |
+| Dependencies | node_modules present, no critical npm audit findings |
+| Environment | All required `.env` vars set with non-placeholder values |
+| Database | TCP reachability + optional psql query |
+| Redis | TCP reachability |
+| Stellar Horizon | HTTP reachability (skipped with `--quick`) |
+| SMTP | TCP reachability (skipped with `--quick`) |
+| Build | TypeScript type-check via `tsc --noEmit` (skipped with `--quick`) |
+| Tests | Runs diagnostics-related unit tests |
+
+The command exits 0 on pass/warn and exits 1 on any failure. It **never
+mutates any data**.
 
 ### Improving The Documentation
 

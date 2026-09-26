@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { ValidationPipe } from "@nestjs/common";
+import { ValidationPipe, VersioningType } from "@nestjs/common";
 import { AppModule } from "./app.module";
 import * as helmet from "helmet";
 import { ConfigService } from "@nestjs/config";
@@ -14,9 +14,18 @@ import * as Sentry from "@sentry/node";
 import { expressIntegration } from "@sentry/node";
 import { initSentry } from "./config/sentry";
 import { sentryBreadcrumbMiddleware } from "./common/middleware/sentry.middleware";
+import { assertSecretsValid } from "./config/secrets-validation";
 import { AccessibilityMiddleware } from "./common/middleware/accessibility.middleware";
 
 async function bootstrap() {
+  // Validate secrets before any other initialisation so misconfigured
+  // deployments fail fast with actionable error messages rather than
+  // confusing runtime errors deep in the stack.
+  assertSecretsValid(process.env as Record<string, string | undefined>, {
+    warn: (msg) => logger.warn(msg),
+    error: (msg) => logger.error(msg),
+  });
+
   initSentry();
 
   // Initialize tracing safely
@@ -71,6 +80,12 @@ async function bootstrap() {
 
   // Global configuration
   app.setGlobalPrefix("api/v1");
+  // URI-based versioning (e.g. /api/v1/... and /api/v2/...).
+  // The global prefix remains "api" while version segments appear per-route.
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: "1",
+  });
   app.useGlobalPipes(
     // Sanitize first to strip XSS payloads before validation
     new SanitizePipe(),

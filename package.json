@@ -39,6 +39,8 @@
     "graphql:codegen": "graphql-codegen --config codegen.ts && prettier --write --ignore-path /dev/null src/graphql/client/generated.ts",
     "openapi:export": "cross-env NODE_ENV=development ts-node -r tsconfig-paths/register scripts/export-openapi.ts",
     "openapi:validate": "ts-node -r tsconfig-paths/register scripts/validate-openapi.ts",
+    "diagnostics": "ts-node -r tsconfig-paths/register scripts/diagnostics.ts",
+    "diagnostics:quick": "ts-node -r tsconfig-paths/register scripts/diagnostics.ts --quick",
     "openapi:client": "npm run openapi:export && npx @openapitools/openapi-generator-cli generate -i docs/openapi.json -g typescript-fetch -o sdks/typescript --additional-properties=supportsES6=true,typescriptThreePlus=true",
     "openapi:client:python": "npm run openapi:export && npx @openapitools/openapi-generator-cli generate -i docs/openapi.json -g python -o sdks/python --additional-properties=packageName=trellis_api,packageVersion=$(npm run -s get-version 2>/dev/null || echo '0.1.0')",
     "openapi:client:all": "npm run openapi:client && npm run openapi:client:python",
