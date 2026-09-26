@@ -145,6 +145,9 @@ import { LoggingMiddleware } from "./common/middleware/logging.middleware";
 import { ProfilingMiddleware } from "./profiling/profiling.middleware";
 import { GraphqlGatewayModule } from "./graphql/graphql.module";
 import { ModuleRegistryModule } from "./modules/registry/module-registry.module";
+import { QuotaAdminController } from "./common/quota/quota-admin.controller";
+import { VersioningModule } from "./common/versioning/versioning.module";
+import { ApiDeprecationMiddleware } from "./common/versioning/api-deprecation.middleware";
 import { ModuleEntity } from "./modules/registry/entities/module.entity";
 import { TenantModuleState } from "./modules/registry/entities/tenant-module-state.entity";
 import { AccessibilityGuard } from "./common/guard/accessibility.guard";
@@ -281,6 +284,8 @@ import { GrantfoxToken } from "./core/auth/entities/grantfox-token.entity";
     WorkersModule,
     ExportModule,
     ModuleRegistryModule,
+    QuotaBudgetModule,
+    VersioningModule,
     CacheModule,
     RateLimitingModule.forRoot(),
     LoggerModule.forRootAsync({
@@ -301,7 +306,7 @@ import { GrantfoxToken } from "./core/auth/entities/grantfox-token.entity";
     NotificationModule,
   ],
 
-  controllers: [AppController],
+  controllers: [AppController, QuotaAdminController],
 
   providers: [
     AppService,
@@ -343,7 +348,8 @@ export class AppModule implements NestModule, OnModuleInit {
     consumer
       .apply(
         (req, res, next) => loggingMiddleware.use(req, res, next),
-        ProfilingMiddleware
+        ProfilingMiddleware,
+        ApiDeprecationMiddleware,
       )
       .forRoutes("*");
   }
