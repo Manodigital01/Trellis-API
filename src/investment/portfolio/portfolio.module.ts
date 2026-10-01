@@ -5,6 +5,7 @@ import { BullModule } from "@nestjs/bull";
 // Modules
 import { AlertsModule } from "src/growth/alerts/alerts.module";
 import { DeFiModule } from "src/defi/defi.module";
+import { AuditModule } from "src/infrastructure/audit/audit.module";
 
 // Entities
 import { Portfolio } from "./entities/portfolio.entity";
@@ -23,7 +24,6 @@ import { PerformanceAnalyticsService } from "./services/performance-analytics.se
 import { BacktestingService } from "./services/backtesting.service";
 import { MLPredictionService } from "./services/ml-prediction.service";
 import { PortfolioConstraintService } from "./services/portfolio-constraint.service";
-import { AuditLogService } from "src/infrastructure/audit/audit-log.service";
 import { TradingTransactionService } from "./services/trading-transaction.service";
 
 // Processors
@@ -65,6 +65,7 @@ import { PortfolioOwnerGuard } from "./guards/portfolio-owner.guard";
     ),
     forwardRef(() => AlertsModule),
     DeFiModule,
+    AuditModule,
   ],
   providers: [
     PortfolioService,
@@ -73,7 +74,6 @@ import { PortfolioOwnerGuard } from "./guards/portfolio-owner.guard";
     BacktestingService,
     MLPredictionService,
     PortfolioConstraintService,
-    AuditLogService,
     TradingTransactionService,
     PortfolioOwnerGuard,
     RebalancingProcessor,
@@ -88,6 +88,8 @@ import { PortfolioOwnerGuard } from "./guards/portfolio-owner.guard";
     MLPredictionService,
     PortfolioConstraintService,
     TradingTransactionService,
+    PortfolioOwnerGuard,
+    TypeOrmModule,
   ],
 })
 export class PortfolioModule {}

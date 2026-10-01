@@ -101,6 +101,25 @@ export class SendNotificationDto {
   @IsString()
   referenceType?: string;
 
+  @ApiPropertyOptional({
+    description: 'Deep link URL or application route to the relevant workflow',
+    example: '/portfolios/123/rebalance',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  deepLink?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Deduplication key to ensure retried or duplicate lifecycle events do not create multiple notifications',
+    example: 'circuit-breaker-trip-2026-09-26-001',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  deduplicationKey?: string;
+
   /** Aggregation key to group notifications and prevent spam */
   @ApiPropertyOptional({
     description:

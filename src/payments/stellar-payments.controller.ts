@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Post,
   Query,
+  Req,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -66,8 +67,15 @@ export class StellarPaymentsController {
     actorType: "user",
   })
   @ApiOperation({ summary: "Create (but do not submit) a Stellar payment" })
-  createPayment(@Body() dto: CreatePaymentDto): Promise<CreatedPayment> {
-    return this.paymentsService.createPayment(dto, STELLAR_PROCESSOR_NAME);
+  createPayment(
+    @Body() dto: CreatePaymentDto,
+    @Req() request: any,
+  ): Promise<CreatedPayment> {
+    return this.paymentsService.createPayment(
+      dto,
+      STELLAR_PROCESSOR_NAME,
+      request.user.sub ?? request.user.id,
+    );
   }
 
   @Post("submit")
@@ -82,11 +90,15 @@ export class StellarPaymentsController {
     summary:
       "Submit a Stellar payment — signs server-side when given the unsigned XDR, or submits a client-signed payload",
   })
-  submit(@Body() dto: StellarSubmitDto): Promise<SubmittedTransaction> {
+  submit(
+    @Body() dto: StellarSubmitDto,
+    @Req() request: any,
+  ): Promise<SubmittedTransaction> {
     if (dto.signedPayload) {
       return this.paymentsService.submitTransaction(
         { paymentId: dto.paymentId, signedPayload: dto.signedPayload },
         STELLAR_PROCESSOR_NAME,
+        request.user.sub ?? request.user.id,
       );
     }
     if (dto.unsignedTransaction) {
@@ -97,6 +109,7 @@ export class StellarPaymentsController {
           unsignedTransaction: dto.unsignedTransaction,
         },
         STELLAR_PROCESSOR_NAME,
+        request.user.sub ?? request.user.id,
       );
     }
     throw new BadRequestException(

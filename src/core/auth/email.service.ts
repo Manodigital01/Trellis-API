@@ -1,14 +1,29 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional, Inject } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { InjectQueue } from "@nestjs/bull";
+import { Queue } from "bull";
 import * as nodemailer from "nodemailer";
 import { Transporter } from "nodemailer";
+
+export interface EmailJobOptions {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+  from?: string;
+}
+
+export const AUTH_EMAIL_RETRY_DELAYS = [60000, 300000, 900000]; // 1m, 5m, 15m
 
 @Injectable()
 export class EmailService {
   private transporter: Transporter;
   private readonly logger = new Logger(EmailService.name);
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @Optional() @InjectQueue("auth-email") private readonly emailQueue?: Queue<EmailJobOptions>,
+  ) {
     this.initializeTransporter();
   }
 
@@ -18,10 +33,7 @@ export class EmailService {
       "SMTP_PASSWORD",
     );
 
-    // For development: use Ethereal (fake SMTP)
-    // For production: use real SMTP credentials from environment
     if (smtpUser && smtpPassword) {
-      // Use configured SMTP
       this.transporter = nodemailer.createTransport({
         host: this.configService.get("SMTP_HOST") || "smtp.ethereal.email",
         port: this.configService.get("SMTP_PORT") || 587,
@@ -33,7 +45,6 @@ export class EmailService {
       });
       this.logger.log("Email service initialized with configured SMTP");
     } else {
-      // Create test account for development
       const testAccount = await nodemailer.createTestAccount();
       this.transporter = nodemailer.createTransport({
         host: "smtp.ethereal.email",
@@ -56,11 +67,7 @@ export class EmailService {
   ): Promise<{ messageId: string; previewUrl?: string }> {
     const verificationUrl = `${this.configService.get("EMAIL_VERIFICATION_URL") as string}?token=${token}`;
 
-    const info = await this.transporter.sendMail({
-      from: this.configService.get("EMAIL_FROM") as string,
-      to: email,
-      subject: "Verify your email address - trellis",
-      html: `
+    const html = `
         <!DOCTYPE html>
         <html>
           <head>
@@ -97,8 +104,9 @@ export class EmailService {
             </div>
           </body>
         </html>
-      `,
-      text: `
+      `;
+
+    const text = `
         Verify Your Email - trellis
         
         You've requested to link this email address to your Trellis wallet account.
@@ -109,32 +117,22 @@ export class EmailService {
         This link will expire in 15 minutes.
         
         If you didn't request this verification, you can safely ignore this email.
-      `,
+      `;
+
+    return this.sendMail({
+      from: this.configService.get("EMAIL_FROM") as string,
+      to: email,
+      subject: "Verify your email address - trellis",
+      html,
+      text,
     });
-
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-
-    if (previewUrl) {
-      this.logger.log(`Email preview URL: ${previewUrl}`);
-    }
-
-    return {
-      messageId: info.messageId,
-      previewUrl: previewUrl || undefined,
-    };
   }
 
   async sendRecoveryEmail(
     email: string,
     walletAddress: string,
   ): Promise<{ messageId: string; previewUrl?: string }> {
-    const info = await this.transporter.sendMail({
-      from:
-        process.env.EMAIL_FROM ||
-        '"Trellis" <noreply@trellis.example>',
-      to: email,
-      subject: "Account Recovery Information - trellis",
-      html: `
+    const html = `
         <!DOCTYPE html>
         <html>
           <head>
@@ -181,8 +179,9 @@ export class EmailService {
             </div>
           </body>
         </html>
-      `,
-      text: `
+      `;
+
+    const text = `
         Account Recovery - trellis
         
         You've requested account recovery information for your Trellis account.
@@ -202,28 +201,19 @@ export class EmailService {
         3. Connect to Trellis with the wallet address shown above
         
         If you didn't request this information, please secure your email account immediately.
-      `,
+      `;
+
+    return this.sendMail({
+      from:
+        process.env.EMAIL_FROM ||
+        '"Trellis" <noreply@trellis.example>',
+      to: email,
+      subject: "Account Recovery Information - trellis",
+      html,
+      text,
     });
-
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-
-    if (previewUrl) {
-      this.logger.log(`Recovery email preview URL: ${previewUrl}`);
-    }
-
-    return {
-      messageId: info.messageId,
-      previewUrl: previewUrl || undefined,
-    };
   }
 
-  /**
-   * Notify a user that two-factor authentication settings changed on their
-   * account. Covers enable, disable and backup-code regeneration events.
-   *
-   * Security alerts are best-effort: a failure to send must never block the
-   * underlying security action, so callers should swallow rejections.
-   */
   async send2faChangeNotification(
     email: string,
     event: "enabled" | "disabled" | "backup-codes-regenerated",
@@ -284,15 +274,33 @@ export class EmailService {
   }
 
   /**
-   * Generic send mail method for custom emails
+   * Generic send mail method. Queues transactional email to Bull queue with backoff strategy if available.
    */
-  async sendMail(options: {
-    to: string;
-    subject: string;
-    html: string;
-    text?: string;
-    from?: string;
-  }): Promise<{ messageId: string; previewUrl?: string }> {
+  async sendMail(options: EmailJobOptions): Promise<{ messageId: string; previewUrl?: string }> {
+    if (this.emailQueue) {
+      try {
+        const job = await this.emailQueue.add("send-email", options, {
+          attempts: 4, // 1 initial + 3 retries
+          backoff: {
+            type: "exponential",
+            delay: 60000, // 1m, 5m, 15m exponential backoff
+          },
+          removeOnComplete: 100,
+          removeOnFail: 500,
+        });
+        this.logger.log(`Queued email job ${job.id} for recipient ${options.to}`);
+        return { messageId: String(job.id) };
+      } catch (err) {
+        this.logger.error(`Failed to queue email job: ${err.message}. Falling back to direct send.`);
+      }
+    }
+    return this.executeSendMail(options);
+  }
+
+  /**
+   * Direct mail dispatch method used by queue processor or fallback.
+   */
+  async executeSendMail(options: EmailJobOptions): Promise<{ messageId: string; previewUrl?: string }> {
     const info = await this.transporter.sendMail({
       from:
         options.from ||

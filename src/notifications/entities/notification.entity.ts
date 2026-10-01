@@ -151,6 +151,15 @@ export class Notification {
   @Column({ type: 'text', nullable: true })
   errorMessage?: string;
 
+  /** Deep link to the relevant workflow or resolution page (e.g. /portfolios/123/rebalance) */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  deepLink?: string;
+
+  /** Deduplication key to prevent repeated notifications for retried/idempotent lifecycle events */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  @Index()
+  deduplicationKey?: string;
+
   /** Aggregation key: notifications with the same key within the cooldown window get collapsed */
   @Column({ type: 'varchar', length: 255, nullable: true })
   @Index()

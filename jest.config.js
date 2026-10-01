@@ -13,8 +13,9 @@ module.exports = {
   },
   transformIgnorePatterns: [
     // Keep ignoring node_modules EXCEPT the ESM-only chain under
-    // @stellar/stellar-sdk, which must be transpiled to load in Jest.
-    '/node_modules/(?!(@stellar|@noble|@exodus|stellar-base|uint8array-extras|smol-toml|eventsource)/)',
+    // @stellar/stellar-sdk, which must be transpiled to load in Jest, and
+    // sanitize-html's ESM-only htmlparser2 dependency chain.
+    '/node_modules/(?!(@stellar|@noble|@exodus|stellar-base|uint8array-extras|smol-toml|eventsource|htmlparser2|dom-serializer|domhandler|domutils|domelementtype|entities)/)',
     '\\.pnp\\.[^\\/]+$',
   ],
   moduleNameMapper: {

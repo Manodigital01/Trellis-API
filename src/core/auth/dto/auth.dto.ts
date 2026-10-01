@@ -6,6 +6,10 @@ import {
   MinLength,
   IsOptional,
 } from "class-validator";
+import {
+  IsRfcEmail,
+  NormalizeEmail,
+} from "../../../common/decorators/is-rfc-email.decorator";
 
 export class RegisterDto {
   @ApiProperty({
@@ -23,7 +27,8 @@ export class RegisterDto {
     required: true,
     example: "user@example.com",
   })
-  @IsEmail()
+  @NormalizeEmail()
+  @IsRfcEmail()
   @IsNotEmpty()
   email: string;
 
@@ -52,6 +57,7 @@ export class LoginDto {
     required: true,
     example: "user@example.com",
   })
+  @NormalizeEmail()
   @IsEmail()
   @IsNotEmpty()
   email: string;

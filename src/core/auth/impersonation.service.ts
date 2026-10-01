@@ -4,7 +4,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { User } from "../user/entities/user.entity";
 import { Role } from "../../common/guard/roles.enum";
-import { AuditLogService } from "../../../infrastructure/audit/audit-log.service";
+import { AuditLogService } from "../../infrastructure/audit/audit-log.service";
 
 @Injectable()
 export class ImpersonationService {

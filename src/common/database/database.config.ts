@@ -87,7 +87,7 @@ export class DatabaseConfigService {
       return {
         type: "postgres",
         url: databaseUrl,
-        database: "alian-structure",
+        database: this.configService.get<string>("DB_DATABASE") ?? "alian-structure",
         pool: {
           max: 10,
           min: 2,
@@ -130,7 +130,7 @@ export class DatabaseConfigService {
     return {
       type: "postgres",
       url: databaseUrl,
-      database: "alian-structure-staging",
+      database: this.configService.get<string>("DB_DATABASE") ?? "alian-structure-staging",
       pool: {
         max: 20,
         min: 5,
@@ -158,7 +158,7 @@ export class DatabaseConfigService {
     return {
       type: "postgres",
       url: databaseUrl,
-      database: "alian-structure-production",
+      database: this.configService.get<string>("DB_DATABASE") ?? "alian-structure-production",
       pool: {
         max: 50,
         min: 10,

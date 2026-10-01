@@ -9,6 +9,7 @@ import {
   verifyTypedData,
 } from "ethers";
 import { ConfigService } from "@nestjs/config";
+import { canonicalJson } from "../../../common/serialization/canonical-json";
 
 /**
  * EIP-712 Domain for Trellis Oracle
@@ -72,7 +73,7 @@ export class PayloadSigningService {
    * Hash payload data using keccak256
    */
   hashPayload(payload: Record<string, any>): string {
-    const jsonString = JSON.stringify(payload);
+    const jsonString = canonicalJson(payload);
     return keccak256(toUtf8Bytes(jsonString));
   }
 
@@ -91,11 +92,11 @@ export class PayloadSigningService {
     value: OraclePayload;
   } {
     const value: OraclePayload = {
-      payloadType,
+      payloadType: payloadType.trim().toLowerCase(),
       payloadHash,
       nonce: nonce.toString(),
       expiresAt: expiresAt.toString(),
-      data: JSON.stringify(data),
+      data: canonicalJson(data),
     };
 
     return {
@@ -186,8 +187,25 @@ export class PayloadSigningService {
         data,
       );
 
-      // Recover signer address from signature
-      const recoveredAddress = verifyTypedData(domain, types, value, signature);
+      // New signatures use canonical JSON. For records created before this
+      // change, retain the former insertion-order JSON representation.
+      let recoveredAddress: string;
+      try {
+        recoveredAddress = verifyTypedData(domain, types, value, signature);
+      } catch {
+        recoveredAddress = "";
+      }
+      if (recoveredAddress.toLowerCase() !== expectedSigner.toLowerCase()) {
+        try {
+          const legacyValue = { ...value, data: JSON.stringify(data) };
+          const legacyAddress = verifyTypedData(domain, types, legacyValue, signature);
+          if (legacyAddress.toLowerCase() === expectedSigner.toLowerCase()) {
+            recoveredAddress = legacyAddress;
+          }
+        } catch {
+          // Not a legacy signature; the canonical recovery result is returned below.
+        }
+      }
 
       // Compare with expected signer (case-insensitive)
       const isValid =

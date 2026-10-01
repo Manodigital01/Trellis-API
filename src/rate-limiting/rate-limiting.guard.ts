@@ -111,22 +111,54 @@ export class DistributedRateLimitGuard implements CanActivate {
     const tier = this.resolveRequestTier(request);
     const policy = this.resolvePolicy(options, tier);
 
-    const tracker = this.getTrackerKey(request);
+    // 4. Dual-layer limits: an unauthenticated IP may not exhaust the
+    //    quota of an authenticated user sharing its traffic, so each
+    //    request is checked against BOTH the IP bucket and — for
+    //    authenticated callers — the per-user bucket. The most restrictive
+    //    surviving decision wins.
     const scope = this.getScope(request, options);
-    const key = this.buildRateLimitKey(tracker, scope, policy.tier);
+    const ipTracker = `ip:${clientIp}`;
+    const userTracker = userId !== undefined ? this.getTrackerKey(request) : null;
 
-    const decision = await this.rateLimiter.consume(
-      key,
+    const ipDecision = await this.rateLimiter.consume(
+      this.buildRateLimitKey(ipTracker, scope, policy.tier),
       {
         limit: policy.limit,
         windowMs: policy.windowMs,
         burst: policy.burst,
         strategy: policy.strategy,
       },
-      tracker,
+      ipTracker,
       scope,
       policy.tier,
     );
+
+    let decision = ipDecision;
+    if (userTracker) {
+      const userDecision = await this.rateLimiter.consume(
+        this.buildRateLimitKey(userTracker, scope, policy.tier),
+        {
+          limit: policy.limit,
+          windowMs: policy.windowMs,
+          burst: policy.burst,
+          strategy: policy.strategy,
+        },
+        userTracker,
+        scope,
+        policy.tier,
+      );
+      // Prefer the tighter bucket: a denial on either layer blocks.
+      decision =
+        !userDecision.allowed
+          ? userDecision
+          : !ipDecision.allowed
+            ? ipDecision
+            : {
+                ...userDecision,
+                remaining: Math.min(ipDecision.remaining, userDecision.remaining),
+                resetAt: Math.max(ipDecision.resetAt, userDecision.resetAt),
+              };
+    }
 
     this.applyHeaders(response, policy, decision);
     this.recordMetrics(tier, scope, policy.strategy, decision);
@@ -134,7 +166,7 @@ export class DistributedRateLimitGuard implements CanActivate {
     if (!decision.allowed) {
       await this.rateLimiter.recordViolation({
         ip: clientIp,
-        tracker,
+        tracker: userTracker ?? ipTracker,
         userId: userId ? String(userId) : undefined,
         route: path,
         method: request.method || "GET",
@@ -165,7 +197,7 @@ export class DistributedRateLimitGuard implements CanActivate {
 
     if (decision.remaining <= Math.max(1, Math.ceil(policy.limit * 0.1))) {
       this.logger.warn(
-        `Approaching rate limit for ${tracker} (${policy.label}): ` +
+        `Approaching rate limit for ${userTracker ?? ipTracker} (${policy.label}): ` +
           `${policy.limit - decision.remaining}/${policy.limit}`,
       );
     }
@@ -320,6 +352,11 @@ export class DistributedRateLimitGuard implements CanActivate {
     },
   ): void {
     const headers: Array<[string, string | number]> = [
+      // RFC 9331 RateLimit header fields, plus the de-facto X-RateLimit-
+      // equivalents used by existing clients.
+      ["RateLimit-Limit", policy.limit],
+      ["RateLimit-Remaining", decision.remaining],
+      ["RateLimit-Reset", Math.max(0, Math.ceil((decision.resetAt - Date.now()) / 1000))],
       ["X-RateLimit-Limit", policy.limit],
       ["X-RateLimit-Remaining", decision.remaining],
       ["X-RateLimit-Reset", new Date(decision.resetAt).toISOString()],

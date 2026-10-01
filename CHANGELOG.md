@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Dependency health checks with public critical-only summary, admin diagnostics
+  and a `npm run deps:health` CLI ([#124](docs/dependency-health.md))
+- Progressive transaction details via `details=summary|standard|advanced` and
+  `dryRun=true` previews ([#125](docs/transaction-details.md))
+- Machine-readable protocol changelog with JSON Schema validation,
+  `GET /changelog/protocol` and `npm run changelog:validate`
+  ([#126](docs/protocol-changelog.md)); the source of truth for protocol changes
+  is [`changelog/protocol-changes.json`](changelog/protocol-changes.json)
+- Deterministic fault-injection harness and failure-mode suites for
+  reconciliation and on-chain submission ([#127](docs/fault-injection.md))
 - Comprehensive documentation for portfolio optimization
 - WebSocket reconnection service with exponential backoff
 - Connection pool management for dashboard WebSockets

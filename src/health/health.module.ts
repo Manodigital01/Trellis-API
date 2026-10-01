@@ -24,5 +24,8 @@ import { HEALTH_REDIS_CLIENT } from "./health.constants";
       },
     },
   ],
+  // Shared with DependencyHealthModule so the PING probe reuses one lazily
+  // connected client instead of opening a second connection per health check.
+  exports: [HEALTH_REDIS_CLIENT],
 })
 export class HealthModule {}

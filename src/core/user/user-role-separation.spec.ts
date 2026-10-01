@@ -3,6 +3,8 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { UserService } from "./user.service";
 import { User, UserRole } from "./entities/user.entity";
+import { SensitiveActionAuditService } from "src/infrastructure/audit/sensitive-actions/sensitive-action-audit.service";
+import { SensitiveActionStatus } from "src/infrastructure/audit/entities/sensitive-action-event.entity";
 
 const makeUser = (role: UserRole = UserRole.USER): User =>
   ({
@@ -35,13 +37,16 @@ const mockRepo = () => ({
 describe("UserService — role separation (Governance vs KYC)", () => {
   let service: UserService;
   let repo: ReturnType<typeof mockRepo>;
+  let sensitiveActionAudit: { recordSensitiveAction: jest.Mock };
 
   beforeEach(async () => {
     repo = mockRepo();
+    sensitiveActionAudit = { recordSensitiveAction: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UserService,
         { provide: getRepositoryToken(User), useValue: repo },
+        { provide: SensitiveActionAuditService, useValue: sensitiveActionAudit },
       ],
     }).compile();
     service = module.get<UserService>(UserService);
@@ -75,10 +80,19 @@ describe("UserService — role separation (Governance vs KYC)", () => {
 
   describe("assignRole", () => {
     it("throws BadRequestException when assigning KYC_OPERATOR to ADMIN user", async () => {
-      repo.findOne.mockResolvedValue(makeUser(UserRole.ADMIN));
+      const user = makeUser(UserRole.ADMIN);
+      repo.findOne.mockResolvedValue(user);
       await expect(
         service.assignRole("user-1", UserRole.KYC_OPERATOR),
       ).rejects.toThrow(BadRequestException);
+      expect(user.role).toBe(UserRole.ADMIN);
+      expect(sensitiveActionAudit.recordSensitiveAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: SensitiveActionStatus.FAILED,
+          beforeState: { role: UserRole.ADMIN },
+          afterState: { role: UserRole.KYC_OPERATOR },
+        }),
+      );
     });
 
     it("throws BadRequestException when assigning ADMIN to KYC_OPERATOR user", async () => {
@@ -100,6 +114,13 @@ describe("UserService — role separation (Governance vs KYC)", () => {
       repo.findOne.mockResolvedValue(user);
       const result = await service.assignRole("user-1", UserRole.ADMIN);
       expect(result.role).toBe(UserRole.ADMIN);
+      expect(sensitiveActionAudit.recordSensitiveAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          beforeState: { role: UserRole.USER },
+          afterState: { role: UserRole.ADMIN },
+          resourceId: "user-1",
+        }),
+      );
     });
 
     it("successfully assigns KYC_OPERATOR to a plain USER", async () => {

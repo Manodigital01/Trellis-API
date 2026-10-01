@@ -1,6 +1,7 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { ExportService } from "../export.service";
-import { DataExport, ExportStatus, ExportScope } from "../entities/data-export.entity";
+import { ExportService } from "./export.service";
+import { DataExport, ExportStatus } from "./entities/data-export.entity";
+import { ExportScope } from "./dto/export.dto";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 
@@ -10,8 +11,8 @@ describe("ExportService", () => {
 
   beforeEach(async () => {
     const mockRepo = {
-      create: jest.fn(),
-      save: jest.fn(),
+      create: jest.fn().mockImplementation((dto) => ({ id: "export_123", ...dto })),
+      save: jest.fn().mockImplementation((entity) => Promise.resolve({ id: "export_123", ...entity })),
       findOne: jest.fn(),
       find: jest.fn(),
       createQueryBuilder: jest.fn(),
@@ -28,7 +29,7 @@ describe("ExportService", () => {
     }).compile();
 
     service = module.get<ExportService>(ExportService);
-    mockExportRepo = mockRepo as jest.Mocked<Repository<DataExport>>;
+    mockExportRepo = mockRepo as unknown as jest.Mocked<Repository<DataExport>>;
   });
 
   afterEach(() => {
@@ -63,21 +64,6 @@ describe("ExportService", () => {
     });
 
     it("should apply custom retention days", async () => {
-      const mockExport = {
-        id: "export_123",
-        userId: "user_123",
-        scope: ExportScope.USER_DATA,
-        format: "json",
-        schemaVersion: "1.0.0",
-        status: ExportStatus.PENDING,
-        expiresAt: new Date(),
-        createdAt: new Date(),
-        filters: {},
-      };
-
-      mockExportRepo.create.mockReturnValue(mockExport as any);
-      mockExportRepo.save.mockResolvedValue(mockExport as any);
-
       const futureDate = new Date();
       futureDate.setDate(futureDate.getDate() + 30);
 
@@ -90,21 +76,6 @@ describe("ExportService", () => {
     });
 
     it("should cap retention days at maximum", async () => {
-      const mockExport = {
-        id: "export_123",
-        userId: "user_123",
-        scope: ExportScope.USER_DATA,
-        format: "json",
-        schemaVersion: "1.0.0",
-        status: ExportStatus.PENDING,
-        expiresAt: new Date(),
-        createdAt: new Date(),
-        filters: {},
-      };
-
-      mockExportRepo.create.mockReturnValue(mockExport as any);
-      mockExportRepo.save.mockResolvedValue(mockExport as any);
-
       const result = await service.createExport("user_123", {
         scope: ExportScope.USER_DATA,
         retentionDays: 200,

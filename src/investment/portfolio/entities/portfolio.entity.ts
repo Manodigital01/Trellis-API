@@ -18,8 +18,12 @@ import { Transaction } from "./transaction.entity";
 import { User } from "src/core/user/entities/user.entity";
 
 export enum PortfolioStatus {
+  DRAFT = "draft",
   ACTIVE = "active",
-  INACTIVE = "inactive",
+  REBALANCING = "rebalancing",
+  PAUSED = "paused",
+  FROZEN = "frozen",
+  INACTIVE = "inactive", // Legacy alias for paused
   ARCHIVED = "archived",
 }
 

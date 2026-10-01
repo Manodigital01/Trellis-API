@@ -43,9 +43,10 @@ so an adapter can narrow its config and native request/response payload types
 while the registry and factory operate against the base type. **Amounts are
 always decimal strings** (e.g. `"10.5"`), never floats.
 
-The `create → sign → submit` flow is **stateless**: each step's output is posted
-back in as the next step's body. There is no payment table (see
-[Persisting payments](#persisting-payments-db-seam)).
+The `create → sign → submit` flow is checkpointed in `payment_operations`.
+Retries replay completed steps, and interrupted submissions are checked with
+the processor before any retry. The exact signed payload is retained to make a
+Stellar retry use the same transaction hash.
 
 ## How processor selection works
 
@@ -116,6 +117,9 @@ or `?processor=`.
 | `POST` | `/payments/:id/sign` | JWT | `SignTransactionDto` |
 | `POST` | `/payments/:id/submit` | JWT | `SubmitTransactionDto` |
 | `GET`  | `/payments/:id/status` | JWT | — |
+| `GET`  | `/payments/:id/recovery` | JWT | — |
+| `POST` | `/payments/:id/recovery/resume` | JWT | — |
+| `GET`  | `/payments/recovery/stuck` | **ADMIN** | `olderThanMinutes` (optional) |
 | `POST` | `/payments/:id/refund` | JWT | `RefundDto` (omit `amount` for full) |
 | `GET`  | `/payments/processors` | JWT | — (list + enabled state) |
 | `POST` | `/payments/processors/:name/enable` | **ADMIN** | — |
@@ -201,20 +205,56 @@ GRANTFOX_API_KEY=...                   # sent as: Authorization: Bearer <key>
   `mapPaymentResponse()` (both marked `// ADAPT:`). If your Grantfox endpoint's
   shape differs, those two methods are the only things to change.
 
-## Persisting payments (DB seam)
+## Sandbox processor (contributor testing)
 
-The system is intentionally stateless — no new TypeORM entity or migration.
-Two seams are documented for when persistence is needed:
+[`SandboxPaymentAdapter`](../sandbox/adapters/sandbox-payment.adapter.ts)
+implements the same `IPaymentProcessor` contract with deterministic,
+credential-free responses served from
+[`src/sandbox/fixtures/sandbox.fixtures.ts`](../sandbox/fixtures/sandbox.fixtures.ts).
+It is the payment seam of integration sandbox mode (issue #57).
 
-- **Enable/disable state** lives in an in-memory `Set` in
-  [`PaymentProcessorRegistry`](./registry/payment-processor.registry.ts). To make
-  a toggle survive restarts / be shared across instances, back the single
-  mutation point (`setEnabled`) and `isEnabled` with a small
-  `payment_processor_state` table. The public method surface does not change.
-- **Payment records** — create/sign/submit currently pass payloads through
-  request bodies. To persist payments (and enforce real idempotency via
-  `idempotencyKey`), add a `payment` entity and write to it in
-  `PaymentsService` around each processor call.
+Unlike `StellarAdapter`/`GrantfoxAdapter` it is **not** tagged with
+`@RegisterPaymentProcessor()`. Instead `SandboxProcessorRegistrar` registers it
+on init **only while `SANDBOX_MODE=true`**, so production never lists or routes
+to a fake processor. Every entry point also fails closed with
+`412 Precondition Failed` when the flag is off or `NODE_ENV=production`.
+
+Select it per request like any other processor:
+
+```bash
+curl -X POST /api/v1/payments \
+  -H 'X-Payment-Processor: sandbox' -H 'Content-Type: application/json' \
+  -d '{"amount":"10","currency":"XLM","destination":"GBSANDBOX","idempotencyKey":"sandbox-1"}'
+```
+
+See [`docs/SANDBOX_MODE.md`](../../docs/SANDBOX_MODE.md) for scenarios,
+configuration, determinism guarantees and limitations, and run
+`npm test -- src/sandbox` for its tests.
+
+## Recovery checkpoints
+
+Each payment operation moves through `CREATING → CREATED → SIGNED → SUBMITTING
+→ SUBMITTED`. Ambiguous create or submit failures become
+`RECOVERY_REQUIRED`; callers should use the same idempotency key or signed
+payload and must not start a new payment. A repeated create request with the
+same processor, key, and request returns its saved response. Reusing a key for
+a different request returns `409 Conflict`.
+
+`POST /payments/:id/submit` records `SUBMITTING` before calling the processor.
+On retry, the API checks status first. It only repeats submission when the
+processor declares the exact payload safe to retry; Stellar hashes are derived
+before broadcast, and replays use the identical signed transaction. Other
+processors fail closed when status cannot be confirmed. The recovery endpoint
+returns the current state and next action without exposing signed transaction
+data. Admins can inspect stale, nonterminal operations through
+`GET /payments/recovery/stuck`.
+The resume endpoint uses the stored signed payload or signs the saved create
+response when the selected processor supports server-side signing, so clients
+can recover even after losing their browser state.
+
+Apply the `CreatePaymentOperations1790467200000` migration before deploying this
+version. Checkpoint rows retain the create response and signed payload needed
+for recovery; protect the database and its backups accordingly.
 
 ## Tests
 
@@ -230,6 +270,8 @@ npm run test -- src/payments        # unit + integration, fully offline
   mocked Horizon `Server` / `HttpService`.
 - `payments.integration.spec` — **side-by-side**: routing by header/env, two
   processors isolated in one test, and disabling one leaving the other working.
+- Recovery coverage verifies idempotent creation, retrying a timed-out submit
+  after reconciliation, and returning the saved result after completion.
 - `stellar-payments.controller.spec` — the `/payments/stellar/*` aliases: pinning
   to Stellar under a `grantfox` env default, server-side sign+submit, and the
   route-precedence guarantee over the generic `/payments/:id/*` routes.

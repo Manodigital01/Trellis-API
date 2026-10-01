@@ -14,6 +14,13 @@ import { WebhookDeadLetter } from "../infrastructure/webhooks/entities/webhook-d
 import { PartialFailure } from "./entities/partial-failure.entity";
 import { PartialFailureController } from "./partial-failure.controller";
 import { PartialFailureService } from "./partial-failure.service";
+import { MaintainerAggregateMetric } from "./maintainer-insights/entities/maintainer-aggregate-metric.entity";
+import { MaintainerInsightsController } from "./maintainer-insights/maintainer-insights.controller";
+import { MaintainerInsightsService } from "./maintainer-insights/maintainer-insights.service";
+import { MaintainerInsightsJobService } from "./maintainer-insights/maintainer-insights-job.service";
+
+import { AuthModule } from "../core/auth/auth.module";
+import { UserModule } from "../core/user/user.module";
 
 /**
  * Comprehensive monitoring & metrics module.
@@ -24,17 +31,31 @@ import { PartialFailureService } from "./partial-failure.service";
  *  - {@link AlertRulesService}       — configurable threshold alerting
  *  - {@link MetricsHistoryService}   — retained historical KPI time series
  *  - {@link MonitoringController}    — /metrics, health, alerts, history, dashboard
+ *  - {@link MaintainerInsightsService} — privacy-preserving usage & reliability analytics
  *
- * The three timer-driven services are started in {@link onModuleInit} rather
+ * The timer-driven services are started in {@link onModuleInit} rather
  * than in their constructors so importing the module (e.g. in a unit test) does
  * not spawn background intervals.
  */
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([StellarTransaction, ReconciliationInvoice, WebhookDeadLetter, PartialFailure]),
+    AuthModule,
+    UserModule,
+    TypeOrmModule.forFeature([
+      StellarTransaction,
+      ReconciliationInvoice,
+      WebhookDeadLetter,
+      PartialFailure,
+      MaintainerAggregateMetric,
+    ]),
   ],
-  controllers: [MonitoringController, OperationalHealthController, PartialFailureController],
+  controllers: [
+    MonitoringController,
+    OperationalHealthController,
+    PartialFailureController,
+    MaintainerInsightsController,
+  ],
   providers: [
     MonitoringMetricsService,
     SystemMetricsService,
@@ -42,6 +63,8 @@ import { PartialFailureService } from "./partial-failure.service";
     MetricsHistoryService,
     OperationalHealthService,
     PartialFailureService,
+    MaintainerInsightsService,
+    MaintainerInsightsJobService,
   ],
   exports: [
     MonitoringMetricsService,
@@ -50,6 +73,8 @@ import { PartialFailureService } from "./partial-failure.service";
     MetricsHistoryService,
     OperationalHealthService,
     PartialFailureService,
+    MaintainerInsightsService,
+    MaintainerInsightsJobService,
   ],
 })
 export class MonitoringModule implements OnModuleInit {

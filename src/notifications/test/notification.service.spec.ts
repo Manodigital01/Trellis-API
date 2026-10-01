@@ -183,6 +183,77 @@ describe('NotificationService', () => {
       );
     });
 
+    it('should return existing notification if deduplicationKey matches existing non-deleted notification', async () => {
+      const existingNotification = {
+        id: 'notif-existing-1',
+        userId: 'user-1',
+        title: 'Settlement Failed',
+        body: 'Settlement invoice #123 failed',
+        deepLink: '/reconciliation/invoices/123',
+        deduplicationKey: 'settlement-fail-123',
+        status: NotificationStatus.SENT,
+        deleted: false,
+      };
+
+      mockNotificationRepo.findOne.mockResolvedValue(existingNotification);
+
+      const dto: SendNotificationDto = {
+        userId: 'user-1',
+        title: 'Settlement Failed',
+        body: 'Settlement invoice #123 failed',
+        deepLink: '/reconciliation/invoices/123',
+        deduplicationKey: 'settlement-fail-123',
+      };
+
+      const result = await service.send(dto);
+
+      expect(result).toEqual(existingNotification);
+      expect(mockNotificationRepo.findOne).toHaveBeenCalledWith({
+        where: {
+          userId: 'user-1',
+          deduplicationKey: 'settlement-fail-123',
+          deleted: false,
+        },
+      });
+      // Should NOT create or save a duplicate
+      expect(mockNotificationRepo.create).not.toHaveBeenCalled();
+      expect(mockNotificationRepo.save).not.toHaveBeenCalled();
+      expect(mockQueueService.enqueueNotification).not.toHaveBeenCalled();
+    });
+
+    it('should persist deepLink and deduplicationKey when sending a new notification', async () => {
+      mockNotificationRepo.findOne.mockResolvedValue(null);
+
+      const dto: SendNotificationDto = {
+        userId: 'user-2',
+        title: 'Circuit Breaker Alert',
+        body: 'Trading halted for Portfolio A',
+        deepLink: '/portfolios/port-a/circuit-breaker',
+        deduplicationKey: 'cb-trip-port-a-2026-09-26',
+        priority: NotificationPriority.CRITICAL,
+      };
+
+      const created = {
+        id: 'notif-new-cb',
+        ...dto,
+        status: NotificationStatus.QUEUED,
+      };
+
+      mockNotificationRepo.create.mockReturnValue(created);
+      mockNotificationRepo.save.mockResolvedValue(created);
+
+      const result = await service.send(dto);
+
+      expect(result.deepLink).toBe('/portfolios/port-a/circuit-breaker');
+      expect(result.deduplicationKey).toBe('cb-trip-port-a-2026-09-26');
+      expect(mockNotificationRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deepLink: '/portfolios/port-a/circuit-breaker',
+          deduplicationKey: 'cb-trip-port-a-2026-09-26',
+        }),
+      );
+    });
+
     it('should suppress notification when aggregation triggers suppression', async () => {
       mockAggregationService.checkAggregation.mockResolvedValue({
         shouldSuppress: true,

@@ -32,6 +32,7 @@ export enum DashboardEvent {
 
   // Error events
   ERROR = "error",
+  MAX_CONNECTIONS_EXCEEDED = "MAX_CONNECTIONS_EXCEEDED",
 }
 
 // Connection information stored per client

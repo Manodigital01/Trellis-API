@@ -140,4 +140,100 @@ describe("GraphQL gateway", () => {
       else process.env.NODE_ENV = previousNodeEnv;
     }
   });
+
+  describe("Query Depth and Complexity Limits", () => {
+    it("rejects queries exceeding maximum depth of 6 with clear validation error", async () => {
+      // Build a gateway with maxDepth = 3 to test depth enforcement precisely
+      const strictGateway = new GraphqlGatewayService(
+        reviewsService as unknown as AgentReviewsService,
+        userService as unknown as UserService,
+        { maxDepth: 3 },
+      );
+
+      // Depth 4 query: agentReviews (1) -> edges (2) -> node (3) -> author (4) -> username (5)
+      const query = `
+        query DeepQuery {
+          agentReviews(agentId: "agent-1") {
+            edges {
+              node {
+                author {
+                  username
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const response = await strictGateway.execute({ query });
+
+      expect(response.data).toBeUndefined();
+      expect(response.errors).toBeDefined();
+      expect(response.errors?.[0].message).toContain(
+        "Query exceeds maximum depth of 3",
+      );
+      expect(
+        reviewsService.getApprovedReviewsConnection,
+      ).not.toHaveBeenCalled();
+      expect(userService.findManyByIds).not.toHaveBeenCalled();
+    });
+
+    it("allows queries within maximum depth of 6", async () => {
+      const query = `
+        query ShallowQuery {
+          agentRating(agentId: "agent-1") {
+            averageRating
+            totalReviews
+          }
+        }
+      `;
+
+      const response = await gateway.execute({ query });
+      expect(response.errors).toBeUndefined();
+      expect(response.data).toBeDefined();
+    });
+
+    it("halts queries exceeding maximum complexity before database resolvers execute", async () => {
+      // Custom low complexity limit for test
+      const strictGateway = new GraphqlGatewayService(
+        reviewsService as unknown as AgentReviewsService,
+        userService as unknown as UserService,
+        { maxComplexity: 30 },
+      );
+
+      // high pagination multiplier: first: 50 -> complexity > 30
+      const query = `
+        query ComplexQuery {
+          agentReviews(agentId: "agent-1", first: 50) {
+            edges {
+              cursor
+              node {
+                id
+                rating
+                reviewText
+                developerResponse
+                author {
+                  id
+                  username
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const response = await strictGateway.execute({ query });
+
+      expect(response.data).toBeUndefined();
+      expect(response.errors).toBeDefined();
+      expect(response.errors?.[0].message).toContain("Query complexity of");
+      expect(response.errors?.[0].message).toContain(
+        "exceeds maximum allowed complexity of 30",
+      );
+      expect(
+        reviewsService.getApprovedReviewsConnection,
+      ).not.toHaveBeenCalled();
+      expect(userService.findManyByIds).not.toHaveBeenCalled();
+    });
+  });
 });

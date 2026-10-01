@@ -22,12 +22,22 @@ export interface ConnectionHealth {
   error?: string;
 }
 
+export interface PoolUsage {
+  activeConnections: number;
+  idleConnections: number;
+  maxConnections: number;
+  utilization: number;
+}
+
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DatabaseService.name);
   private readonly dataSource: DataSource;
   private monitorInterval?: NodeJS.Timeout;
+  private poolMonitorInterval?: NodeJS.Timeout;
   private readonly healthCheckIntervalMs: number;
+  private readonly poolMonitorIntervalMs: number;
+  private readonly poolWarningThreshold: number;
 
   constructor(
     private readonly configService: ConfigService,
@@ -38,16 +48,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.dataSource = dataSource;
     this.healthCheckIntervalMs =
       this.configService.get<number>("DB_HEALTH_CHECK_INTERVAL_MS") ?? 30000;
+    this.poolMonitorIntervalMs =
+      this.configService.get<number>("DB_POOL_MONITOR_INTERVAL_MS") ?? 60000;
+    this.poolWarningThreshold =
+      this.configService.get<number>("DB_POOL_WARNING_THRESHOLD") ?? 0.85;
   }
 
   async onModuleInit(): Promise<void> {
     await this.initializeWithRetry();
     this.startPeriodicHealthCheck();
+    this.startPoolMonitoring();
     this.setupQueryLogging();
   }
 
   async onModuleDestroy(): Promise<void> {
     this.stopPeriodicHealthCheck();
+    this.stopPoolMonitoring();
     if (this.dataSource?.isInitialized) {
       await this.dataSource.destroy();
     }
@@ -154,6 +170,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  getPoolUsage(): PoolUsage {
+    const pool = (this.dataSource as any).driver?.pool;
+    const idleConnections = Number(pool?.available ?? 0);
+    const totalConnections = Number(pool?.size ?? 0);
+    const activeConnections = Math.max(totalConnections - idleConnections, 0);
+    const maxConnections = Number(
+      pool?.options?.max ?? pool?.max ?? totalConnections,
+    );
+    const utilization =
+      maxConnections > 0 ? activeConnections / maxConnections : 0;
+    return {
+      activeConnections,
+      idleConnections,
+      maxConnections,
+      utilization,
+    };
+  }
+
   getDataSource(): DataSource {
     if (!this.dataSource?.isInitialized) {
       throw new Error("DataSource is not initialized");
@@ -163,7 +197,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async shutdown(): Promise<void> {
     this.logger.log("Shutting down database service");
-    this.onModuleDestroy();
+    await this.onModuleDestroy();
   }
 
   private startPeriodicHealthCheck(): void {
@@ -182,6 +216,25 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (this.monitorInterval) {
       clearInterval(this.monitorInterval);
       this.monitorInterval = undefined;
+    }
+  }
+
+  private startPoolMonitoring(): void {
+    this.poolMonitorInterval = setInterval(() => {
+      const usage = this.getPoolUsage();
+      if (usage.utilization >= this.poolWarningThreshold) {
+        this.logger.warn(
+          `Database pool utilization is ${(usage.utilization * 100).toFixed(1)}% ` +
+            `(${usage.activeConnections}/${usage.maxConnections}); possible connection leak`,
+        );
+      }
+    }, this.poolMonitorIntervalMs);
+  }
+
+  private stopPoolMonitoring(): void {
+    if (this.poolMonitorInterval) {
+      clearInterval(this.poolMonitorInterval);
+      this.poolMonitorInterval = undefined;
     }
   }
 

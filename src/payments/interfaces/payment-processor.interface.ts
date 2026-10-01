@@ -56,6 +56,8 @@ export interface PaymentRequest {
 /** The result of {@link IPaymentProcessor.createPayment}. */
 export interface CreatedPayment {
   paymentId: string;
+  /** Recovery checkpoint id assigned by Trellis. */
+  recoveryId?: string;
   status: PaymentStatus;
   /**
    * Backend-specific unsigned payload (e.g. a Stellar transaction XDR) that the
@@ -157,6 +159,15 @@ export interface IPaymentProcessor<
   submitTransaction(signed: SignedTransaction): Promise<SubmittedTransaction>;
   getStatus(paymentId: string): Promise<PaymentStatusResult>;
   refund(request: RefundRequest): Promise<RefundResult>;
+
+  /** Whether resubmitting the exact same signed payload cannot duplicate effects. */
+  readonly supportsSafeSubmissionRetry?: boolean;
+
+  /** Stable external transaction identifier derivable before submission. */
+  getSubmissionHash?(signed: SignedTransaction): string;
+
+  /** Verify that a client-signed payload matches the saved create response. */
+  matchesCreatedPayment?(created: TCreated, signed: SignedTransaction): boolean;
 }
 
 /** Lightweight, serialisable view of a processor for list endpoints. */

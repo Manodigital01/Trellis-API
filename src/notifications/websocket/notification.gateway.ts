@@ -13,6 +13,7 @@ import { Server, Socket } from 'socket.io';
 import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { JwtService } from '@nestjs/jwt';
+import { createGatewayCorsOptions } from '../../config/cors.config';
 import { Notification } from '../entities/notification.entity';
 
 /**
@@ -35,7 +36,8 @@ import { Notification } from '../entities/notification.entity';
  */
 @WebSocketGateway({
   namespace: '/notifications',
-  cors: { origin: '*', credentials: true },
+  // Issue #83: shared HTTP allow-list instead of `origin: '*'` with credentials.
+  cors: createGatewayCorsOptions(),
   pingInterval: 30000,
   pingTimeout: 5000,
 })

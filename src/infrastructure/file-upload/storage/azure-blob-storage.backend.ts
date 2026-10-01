@@ -52,7 +52,7 @@ export class AzureBlobStorageBackend implements StorageBackend {
       );
 
       // Ensure container exists
-      await containerClient.createIfNotExists({ access: "private" });
+      await containerClient.createIfNotExists();
 
       const blockBlobClient = containerClient.getBlockBlobClient(filePath);
       await blockBlobClient.upload(buffer, buffer.length, {
@@ -128,7 +128,7 @@ export class AzureBlobStorageBackend implements StorageBackend {
           permissions: BlobSASPermissions.parse("r"),
           expiresOn: new Date(Date.now() + expiresIn * 1000),
         } as any,
-        this.connectionString,
+        this.connectionString as any,
       ).toString();
 
       return `${blockBlobClient.url}?${sasToken}`;

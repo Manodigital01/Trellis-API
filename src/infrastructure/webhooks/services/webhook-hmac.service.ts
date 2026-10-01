@@ -14,6 +14,19 @@ export class WebhookHmacService {
     return `sha256=${signature}`;
   }
 
+  /** Sign the timestamp and exact body together to prevent timestamp swapping. */
+  signTimestamped(
+    payload: string | Buffer,
+    secret: string,
+    timestamp: string,
+  ): string {
+    const signature = createHmac("sha256", secret)
+      .update(`${timestamp}.`, "utf8")
+      .update(payload)
+      .digest("hex");
+    return `sha256=${signature}`;
+  }
+
   /**
    * Build the standard webhook request headers including the HMAC signature.
    */
@@ -40,12 +53,29 @@ export class WebhookHmacService {
    * Verify an incoming HMAC signature (useful for echo/test endpoints).
    */
   verify(payload: string, secret: string, receivedSignature: string): boolean {
-    const expected = this.sign(payload, secret);
+    return this.matches(this.sign(payload, secret), receivedSignature);
+  }
+
+  verifyTimestamped(
+    payload: string | Buffer,
+    secret: string,
+    timestamp: string,
+    receivedSignature: string,
+  ): boolean {
+    return this.matches(
+      this.signTimestamped(payload, secret, timestamp),
+      receivedSignature,
+    );
+  }
+
+  private matches(expected: string, receivedSignature: string): boolean {
+    const expectedBytes = Buffer.from(expected, "utf8");
+    const receivedBytes = Buffer.from(receivedSignature, "utf8");
+
+    if (expectedBytes.length !== receivedBytes.length) return false;
+
     try {
-      return timingSafeEqual(
-        Buffer.from(expected, "utf8"),
-        Buffer.from(receivedSignature, "utf8"),
-      );
+      return timingSafeEqual(expectedBytes, receivedBytes);
     } catch {
       return false;
     }

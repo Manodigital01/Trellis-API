@@ -1,5 +1,11 @@
-import { ArgumentsHost, HttpStatus, BadRequestException as NestBadRequestException } from "@nestjs/common";
+import {
+  ArgumentsHost,
+  HttpStatus,
+  Logger,
+  BadRequestException as NestBadRequestException,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { EntityNotFoundError, QueryFailedError } from "typeorm";
 import { GlobalExceptionFilter } from "./global-exception.filter";
 import {
   SettlementFailedException,
@@ -168,6 +174,196 @@ describe("GlobalExceptionFilter", () => {
           recoveryGuidance: expect.stringContaining("Ensure the source wallet holds sufficient balance"),
         }),
       );
+    });
+  });
+
+  describe("Database Errors (#97)", () => {
+    /** node-postgres throws its own `DatabaseError`, named as such, with a SQLSTATE. */
+    const pgError = (code: string, message: string) =>
+      Object.assign(new Error(message), {
+        name: "DatabaseError",
+        code,
+        severity: "ERROR",
+      });
+
+    const queryFailed = (code: string, message: string) =>
+      new QueryFailedError(
+        'INSERT INTO "accounts" ("email", "planId") VALUES ($1, $2)',
+        ["victim@example.com", "growth"],
+        pgError(code, message),
+      );
+
+    let logSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      logSpy = jest.spyOn(Logger.prototype, "error").mockImplementation();
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+    });
+
+    const payload = () => mockResponse.json.mock.calls[0][0];
+
+    it("maps a unique violation (23505) to 409 without leaking the constraint or the value", () => {
+      const exception = queryFailed(
+        "23505",
+        'duplicate key value violates unique constraint "accounts_email_key"',
+      );
+
+      filter.catch(exception, mockHost);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.CONFLICT);
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusCode: 409,
+          errorCode: ErrorCode.DUPLICATE_ENTRY,
+          message: "A record with this identifier already exists",
+          retryable: false,
+          recoveryGuidance: expect.stringContaining("different identifier"),
+          correlationId: expect.any(String),
+        }),
+      );
+
+      const serialized = JSON.stringify(payload());
+      expect(serialized).not.toContain("accounts_email_key");
+      expect(serialized).not.toContain("accounts");
+      expect(serialized).not.toContain("victim@example.com");
+      expect(serialized).not.toContain("INSERT");
+      expect(serialized).not.toContain("23505");
+    });
+
+    it("maps a foreign key violation (23503) to 400 without leaking the table or constraint name", () => {
+      const exception = queryFailed(
+        "23503",
+        'insert or update on table "invoices" violates foreign key constraint "FK_invoices_account"',
+      );
+
+      filter.catch(exception, mockHost);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusCode: 400,
+          errorCode: ErrorCode.VALIDATION_ERROR,
+          domain: ErrorDomain.VALIDATION,
+          message: "A referenced record does not exist",
+          retryable: false,
+        }),
+      );
+
+      const serialized = JSON.stringify(payload());
+      expect(serialized).not.toContain("invoices");
+      expect(serialized).not.toContain("FK_invoices_account");
+    });
+
+    it("maps invalid text representation (22P02) to 400 and never echoes the rejected value", () => {
+      const exception = queryFailed(
+        "22P02",
+        'invalid input syntax for type uuid: "not-a-uuid-42"',
+      );
+
+      filter.catch(exception, mockHost);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusCode: 400,
+          errorCode: ErrorCode.INVALID_PARAMETER,
+          message: "A supplied value has an invalid format",
+          retryable: false,
+        }),
+      );
+      expect(JSON.stringify(payload())).not.toContain("not-a-uuid-42");
+    });
+
+    it.each([
+      ["40001", HttpStatus.CONFLICT, ErrorCode.CONFLICT],
+      ["55P03", HttpStatus.CONFLICT, ErrorCode.CONFLICT],
+      ["53300", HttpStatus.SERVICE_UNAVAILABLE, ErrorCode.SERVICE_UNAVAILABLE],
+    ])(
+      "marks a retryable database failure (%s) as retryable with a retry hint",
+      (code, status, errorCode) => {
+        filter.catch(queryFailed(code, `nope: ${code}`), mockHost);
+
+        expect(mockResponse.status).toHaveBeenCalledWith(status);
+        expect(payload()).toEqual(
+          expect.objectContaining({ errorCode, retryable: true }),
+        );
+        expect(payload().retryAfterSeconds).toBeGreaterThan(0);
+      },
+    );
+
+    it("sanitizes an unmapped database code into an opaque 500", () => {
+      const exception = queryFailed(
+        "XX001",
+        'failing to encode "plans_cache_entry" output for internal use',
+      );
+
+      filter.catch(exception, mockHost);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+      expect(payload().errorCode).toBe(ErrorCode.DATABASE_ERROR);
+      expect(JSON.stringify(payload())).not.toContain("plans_cache_entry");
+    });
+
+    it("maps a lost connection to a retryable 503 even without a QueryFailedError wrapper", () => {
+      const exception = Object.assign(
+        new Error("Connection terminated unexpectedly"),
+        { name: "Error", code: "ECONNREFUSED" },
+      );
+
+      filter.catch(exception, mockHost);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+      expect(payload()).toEqual(
+        expect.objectContaining({
+          errorCode: ErrorCode.SERVICE_UNAVAILABLE,
+          domain: ErrorDomain.SYSTEM,
+          retryable: true,
+        }),
+      );
+      expect(JSON.stringify(payload())).not.toContain("ECONNREFUSED");
+    });
+
+    it("reads the code through a `cause` chain", () => {
+      const exception = Object.assign(new Error("save failed"), {
+        cause: { name: "Error", code: "23505" },
+      });
+
+      filter.catch(exception, mockHost);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.CONFLICT);
+      expect(payload().errorCode).toBe(ErrorCode.DUPLICATE_ENTRY);
+    });
+
+    it("returns a 404 for EntityNotFoundError without naming the entity", () => {
+      filter.catch(
+        new EntityNotFoundError("AccountEntity", { accountId: "acc_1" }),
+        mockHost,
+      );
+
+      expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
+      expect(payload().errorCode).toBe(ErrorCode.NOT_FOUND);
+      expect(JSON.stringify(payload())).not.toContain("AccountEntity");
+      expect(JSON.stringify(payload())).not.toContain("acc_1");
+    });
+
+    it("keeps the raw driver failure in the server log for diagnosis", () => {
+      filter.catch(
+        queryFailed(
+          "23505",
+          'duplicate key value violates unique constraint "accounts_email_key"',
+        ),
+        mockHost,
+      );
+
+      const logged = JSON.stringify(logSpy.mock.calls);
+      expect(logged).toContain("accounts_email_key");
     });
   });
 

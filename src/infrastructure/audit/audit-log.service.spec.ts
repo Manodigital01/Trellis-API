@@ -25,3 +25,36 @@ describe("AuditLogService retention", () => {
     expect(result.protectedIds).toEqual(["protected"]);
   });
 });
+
+describe("AuditLogService timeline", () => {
+  it("should return only public logs for a specific user", async () => {
+    const qbMock = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[{ id: "log-1" }], 1]),
+    };
+
+    const repo = {
+      createQueryBuilder: jest.fn().mockReturnValue(qbMock),
+    };
+
+    const paginationService = {
+      applyDescendingKeyset: jest.fn(),
+      encode: jest.fn(),
+    };
+
+    const service = new AuditLogService(repo as any, {} as any, paginationService as any);
+
+    const result = await service.getTimeline("user-123");
+
+    expect(repo.createQueryBuilder).toHaveBeenCalledWith("log");
+    expect(qbMock.where).toHaveBeenCalledWith("log.userId = :userId", { userId: "user-123" });
+    expect(qbMock.andWhere).toHaveBeenCalledWith("log.visibility = :visibility", { visibility: "PUBLIC" });
+    expect(result.total).toBe(1);
+    expect(result.data).toEqual([{ id: "log-1" }]);
+  });
+});

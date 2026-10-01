@@ -12,6 +12,7 @@ import { ConfigService } from "@nestjs/config";
 import { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { AppException } from "../errors/app.exception";
+import { mapDatabaseError } from "../errors/database-error-mapper";
 import { ErrorCode, ErrorDomain } from "../errors/error-codes";
 import {
   getErrorTaxonomy,
@@ -91,10 +92,24 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         errorCode = this.mapStatusToCode(status);
       }
     } else {
-      // Unhandled / unexpected exception (e.g. Error, DB connection loss)
-      status = HttpStatus.INTERNAL_SERVER_ERROR;
-      errorCode = ErrorCode.INTERNAL_ERROR;
-      clientMessage = "An unexpected error occurred";
+      // Issue #97: a driver failure must never reach the client verbatim. The
+      // raw text names tables, columns, constraint names and — for 22P02 — the
+      // offending value, so it is mapped to a sanitized AppException here and
+      // left to `logError`/`reportToSentry` below for the server-side record.
+      const databaseError = mapDatabaseError(exception);
+      if (databaseError) {
+        status = databaseError.getStatus();
+        errorCode = databaseError.errorCode;
+        domain = databaseError.domain;
+        retryable = databaseError.retryable;
+        retryAfterSeconds = databaseError.retryAfterSeconds;
+        recoveryGuidance = databaseError.recoveryGuidance;
+        clientMessage = this.extractMessage(databaseError);
+      } else {
+        status = HttpStatus.INTERNAL_SERVER_ERROR;
+        errorCode = ErrorCode.INTERNAL_ERROR;
+        clientMessage = "An unexpected error occurred";
+      }
     }
 
     // 2. Resolve taxonomy defaults for domain, retryability, and recovery guidance

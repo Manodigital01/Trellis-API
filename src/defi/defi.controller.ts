@@ -33,6 +33,8 @@ import {
   UpdateYieldStrategyDto,
   RebalanceStrategyDto,
   CompoundRewardsDto,
+  CompoundingPlanDto,
+  TriggerAutoCompoundDto,
   StrategyPerformanceDto,
 } from "./dto/yield-strategy.dto";
 import { StakeDto, UnstakeDto, AutoCompoundConfigDto } from "./dto/staking.dto";
@@ -303,6 +305,38 @@ export class DeFiController {
     @Body() dto: CompoundRewardsDto,
   ) {
     return this.yieldOptimizationService.autoCompoundRewards(strategyId);
+  }
+
+  @Post("strategies/:strategyId/compounding-plan")
+  async getCompoundingPlan(
+    @Param("strategyId") strategyId: string,
+    @Body() dto: CompoundingPlanDto,
+  ) {
+    return this.yieldOptimizationService.getCompoundingPlan(strategyId, {
+      positionValueUsd: dto.position_value_usd,
+      apy: dto.apy,
+      gasCostPerCompoundUsd: dto.gas_cost_per_compound_usd,
+      annualVolatility: dto.annual_volatility,
+      priceRatio: dto.price_ratio,
+      maxImpermanentLossPerCompoundPercent:
+        dto.max_impermanent_loss_per_compound_percent,
+      minIntervalHours: dto.min_interval_hours,
+      maxIntervalHours: dto.max_interval_hours,
+    });
+  }
+
+  /**
+   * Automated compounding: runs the interval trigger and only compounds when
+   * the interval has elapsed and the rewards cover the gas.
+   */
+  @Post("strategies/:strategyId/auto-compound")
+  async autoCompoundStrategy(
+    @Param("strategyId") strategyId: string,
+    @Body() dto: TriggerAutoCompoundDto,
+  ) {
+    return this.yieldOptimizationService.runScheduledCompounding(strategyId, {
+      force: dto.force,
+    });
   }
 
   @Get("strategies/:strategyId/performance")

@@ -1,4 +1,5 @@
 import { IsEmail, IsString, Length } from "class-validator";
+import { NormalizeEmail } from "../../../common/decorators/is-rfc-email.decorator";
 import { ApiProperty } from "@nestjs/swagger";
 
 export class RecoverWalletDto {
@@ -6,6 +7,7 @@ export class RecoverWalletDto {
     description: "The user's email address.",
     example: "user@example.com",
   })
+  @NormalizeEmail()
   @IsEmail()
   email: string;
 

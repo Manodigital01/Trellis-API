@@ -26,6 +26,8 @@ export interface AgentMetrics {
   userRating?: number;
   /** Total executions — used only as a tie-breaker (more proven sample ranks higher). */
   executions?: number;
+  /** Timestamp at which the rating/reputation was last refreshed. */
+  ratingUpdatedAt?: Date;
 }
 
 export interface ScoringWeights {
@@ -47,6 +49,7 @@ export interface ScoreBreakdown {
   roi: number;
   risk: number;
   userRating: number;
+  ratingDecay: number;
 }
 
 export interface AgentScore {
@@ -61,6 +64,15 @@ export interface RankedAgent extends AgentScore {
 }
 
 export class AgentScoring {
+  static readonly DECAY_THRESHOLD_DAYS = 30;
+  static readonly DECAY_LAMBDA = 0.05;
+
+  static decayFactor(updatedAt?: Date, now = new Date()): number {
+    if (!updatedAt) return 1;
+    const days = (now.getTime() - updatedAt.getTime()) / 86_400_000;
+    if (days <= this.DECAY_THRESHOLD_DAYS) return 1;
+    return Math.exp(-this.DECAY_LAMBDA * (days - this.DECAY_THRESHOLD_DAYS));
+  }
   private static clamp(n: number, lo: number, hi: number): number {
     if (!Number.isFinite(n)) return lo;
     return Math.min(hi, Math.max(lo, n));
@@ -110,7 +122,8 @@ export class AgentScoring {
       roi: this.normalizeRoi(m.roi ?? 0),
       // invert risk: low risk -> high contribution
       risk: 1 - this.clamp(m.risk ?? 0, 0, 1),
-      userRating: this.clamp((m.userRating ?? 0) / 5, 0, 1),
+      userRating: this.clamp((m.userRating ?? 0) / 5, 0, 1) * this.decayFactor(m.ratingUpdatedAt),
+      ratingDecay: this.decayFactor(m.ratingUpdatedAt),
     };
   }
 

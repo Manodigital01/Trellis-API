@@ -30,6 +30,9 @@ jobs:
           npm run graphql:codegen
           git diff --exit-code -- src/graphql/client/generated.ts
 
+      - name: Validate the machine-readable protocol changelog
+        run: npm run changelog:validate
+
       - name: Run TypeScript check
         run: npx tsc --noEmit
 

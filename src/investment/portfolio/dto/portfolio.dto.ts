@@ -134,9 +134,36 @@ export class PortfolioResponseDto {
 
   @ApiProperty({ example: "2026-06-20T00:00:00.000Z" })
   updatedAt: Date;
+
+  @ApiPropertyOptional({ example: "active", enum: ["draft", "active", "rebalancing", "paused", "frozen", "archived"] })
+  lifecycleState?: string;
+
+  @ApiPropertyOptional({ example: false })
+  isTerminal?: boolean;
+
+  @ApiPropertyOptional({ example: ["rebalancing", "paused", "frozen", "archived"] })
+  allowedTransitions?: string[];
 }
 
 export class PortfolioListResponseDto {
   @ApiProperty({ type: [PortfolioResponseDto] })
   portfolios: PortfolioResponseDto[];
+}
+
+export class TransitionPortfolioStateDto {
+  @ApiProperty({
+    description: "Target lifecycle state",
+    example: "paused",
+    enum: ["draft", "active", "rebalancing", "paused", "frozen", "archived"],
+  })
+  @IsString()
+  targetState: string;
+
+  @ApiPropertyOptional({
+    description: "Optional audit reason or justification for the state transition",
+    example: "Scheduled maintenance pause",
+  })
+  @IsOptional()
+  @IsString()
+  reason?: string;
 }

@@ -33,6 +33,15 @@ export enum KycStatus {
   REJECTED = "rejected",
 }
 
+export enum UserStatus {
+  PENDING_VERIFICATION = "pending_verification",
+  ACTIVE = "active",
+  SUSPENDED = "suspended",
+  LOCKED = "locked",
+  DEACTIVATED = "deactivated",
+  ARCHIVED = "archived",
+}
+
 @Entity("users")
 export class User {
   @PrimaryGeneratedColumn("uuid")
@@ -73,6 +82,13 @@ export class User {
 
   @Column({ default: false })
   isActive: boolean;
+
+  @Column({
+    type: "varchar",
+    default: UserStatus.PENDING_VERIFICATION,
+    nullable: true,
+  })
+  lifecycleState?: UserStatus;
 
   @Column({ type: "timestamp", nullable: true })
   lastLoginAt: Date;

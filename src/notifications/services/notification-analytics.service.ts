@@ -6,6 +6,7 @@ import { NotificationDeliveryLog, DeliveryStatus } from '../entities/notificatio
 import { NotificationAnalytics } from '../entities/notification-analytics.entity';
 import { NotificationChannel } from '../entities/notification.entity';
 import { QueryAnalyticsDto, EngagementSummaryDto } from '../dto/notification-analytics.dto';
+import { DistributedLock } from '../../infrastructure/distributed-lock/distributed-lock.decorator';
 
 @Injectable()
 export class NotificationAnalyticsService {
@@ -129,6 +130,7 @@ export class NotificationAnalyticsService {
    * Runs every hour at minute :5.
    */
   @Cron('5 * * * *')
+  @DistributedLock('notifications:hourly-analytics', 10 * 60_000)
   async aggregateHourlyAnalytics(): Promise<void> {
     await this.runAggregation('hourly');
   }
@@ -138,6 +140,7 @@ export class NotificationAnalyticsService {
    * Runs daily at 01:05.
    */
   @Cron('5 1 * * *')
+  @DistributedLock('notifications:daily-analytics', 30 * 60_000)
   async aggregateDailyAnalytics(): Promise<void> {
     await this.runAggregation('daily');
   }

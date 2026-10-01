@@ -1,5 +1,5 @@
-import { Controller, Post, Get, Body, Param, UseGuards, Request, Logger } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from "@nestjs/swagger";
+import { Controller, Post, Get, Body, Param, Query, UseGuards, Request, Logger } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiParam } from "@nestjs/swagger";
 import { ExportService } from "./export.service";
 import { CreateExportDto, ExportScope } from "./dto/export.dto";
 import { JwtAuthGuard } from "src/core/auth/jwt.guard";

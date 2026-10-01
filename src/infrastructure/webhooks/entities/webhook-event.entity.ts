@@ -14,6 +14,15 @@ export enum WebhookEventStatus {
 }
 
 @Entity("webhook_events")
+@Index(
+  "UQ_webhook_events_subscription_external_id",
+  ["sourceSubscriptionId", "externalEventId"],
+  {
+    unique: true,
+    where:
+      '"sourceSubscriptionId" IS NOT NULL AND "externalEventId" IS NOT NULL',
+  },
+)
 export class WebhookEvent {
   @PrimaryGeneratedColumn("uuid")
   id: string;
@@ -21,6 +30,12 @@ export class WebhookEvent {
   @Column({ type: "varchar", length: 255 })
   @Index()
   eventType: string;
+
+  @Column({ type: "uuid", nullable: true })
+  sourceSubscriptionId: string | null;
+
+  @Column({ type: "varchar", length: 255, nullable: true })
+  externalEventId: string | null;
 
   @Column({ type: "jsonb" })
   payload: Record<string, any>;

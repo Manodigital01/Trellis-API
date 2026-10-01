@@ -1,14 +1,31 @@
+# Dependencies are installed inside the image; never copy the host's.
 node_modules
 npm-debug.log
+yarn-error.log
+
+# VCS and editor metadata
 .git
 .gitignore
-README.md
-.env
-.env.local
-dist
-coverage
+.github
+.gitattributes
 .vscode
 .idea
-.DS_Store
 *.swp
 *.swo
+.DS_Store
+
+# Build output is produced by the builder stage
+dist
+coverage
+
+# Local secrets and environment overrides — only .env.example ships.
+.env
+.env.*
+!.env.example
+
+# Test/lint tooling and docs are not needed to build or run the server
+test
+test-main
+docs
+*.md
+*.zip

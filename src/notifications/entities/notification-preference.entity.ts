@@ -14,6 +14,13 @@ export enum NotificationChannelPreference {
   DIGEST = 'digest',
 }
 
+export enum NotificationDeliveryMode {
+  IMMEDIATE = 'immediate',
+  DAILY_DIGEST = 'daily_digest',
+  WEEKLY_SUMMARY = 'weekly_summary',
+  DISABLED = 'disabled',
+}
+
 @Entity('notification_preferences')
 @Index(['userId', 'category', 'channel'], { unique: true })
 export class NotificationPreference {
@@ -40,6 +47,10 @@ export class NotificationPreference {
     default: NotificationChannelPreference.ENABLED,
   })
   preference: NotificationChannelPreference;
+
+  /** Delivery policy for routine notifications. Critical notifications bypass it. */
+  @Column({ type: 'varchar', length: 30, default: NotificationDeliveryMode.IMMEDIATE })
+  deliveryMode: NotificationDeliveryMode;
 
   /** For digest mode: how often to send digests (e.g., hourly, daily, weekly) */
   @Column({ type: 'varchar', length: 50, nullable: true })

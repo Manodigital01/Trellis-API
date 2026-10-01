@@ -29,9 +29,7 @@ export class CacheService {
   private readonly redis: Redis | null;
   private readonly memoryCache: Map<string, MemoryCacheEntry>;
   private readonly keyGenerator: CacheKeyGenerator;
-  readonly config: Required<
-    Omit<CacheConfig, "memoryCache">
-  > & { memoryCache?: Map<string, MemoryCacheEntry> };
+  readonly config: typeof DEFAULT_CACHE_CONFIG;
 
   /** In-flight singleflight map for stampede prevention. */
   private readonly inflight = new Map<string, Promise<unknown>>();

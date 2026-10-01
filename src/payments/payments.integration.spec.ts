@@ -3,12 +3,17 @@ import { INestApplication } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { Test, TestingModule } from "@nestjs/testing";
 import { Account, Keypair, Networks } from "@stellar/stellar-sdk";
+import { getRepositoryToken } from "@nestjs/typeorm";
 import { of } from "rxjs";
 import request from "supertest";
 import { JwtAuthGuard } from "src/core/auth/jwt.guard";
 import { RolesGuard } from "src/common/guard/roles.guard";
 import { createGlobalValidationPipe } from "src/common/pipes/validation.pipe";
 import { STELLAR_HORIZON_SERVER } from "./adapters/stellar/stellar.constants";
+import {
+  PaymentOperation,
+  PaymentOperationState,
+} from "./entities/payment-operation.entity";
 import { PaymentsModule } from "./payments.module";
 
 /**
@@ -25,6 +30,55 @@ describe("Payments (side-by-side integration)", () => {
   const destKp = Keypair.random();
 
   let app: INestApplication;
+  const paymentOperations: PaymentOperation[] = [];
+  let operationSequence = 0;
+  let failSubmittedCheckpoint = false;
+  const operationRepository = {
+    create: (values: Partial<PaymentOperation>) =>
+      Object.assign(new PaymentOperation(), values, {
+        operationId: `operation-${++operationSequence}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    findOne: async ({ where }: { where: Partial<PaymentOperation> }) =>
+      paymentOperations.find((operation) =>
+        Object.entries(where).every(([key, value]) => operation[key] === value),
+      ) ?? null,
+    save: async (operation: PaymentOperation) => {
+      if (
+        failSubmittedCheckpoint &&
+        operation.state === PaymentOperationState.SUBMITTED
+      ) {
+        failSubmittedCheckpoint = false;
+        throw new Error("simulated checkpoint write failure");
+      }
+      operation.updatedAt = new Date();
+      const existingIndex = paymentOperations.findIndex(
+        (row) => row.operationId === operation.operationId,
+      );
+      if (existingIndex === -1) {
+        paymentOperations.push(operation);
+      } else {
+        paymentOperations[existingIndex] = operation;
+      }
+      return operation;
+    },
+    update: async (where: Partial<PaymentOperation>, values: Partial<PaymentOperation>) => {
+      const operation = paymentOperations.find((row) =>
+        Object.entries(where).every(([key, value]) => row[key] === value),
+      );
+      if (!operation) {
+        return { affected: 0 };
+      }
+      Object.assign(operation, values, { updatedAt: new Date() });
+      return { affected: 1 };
+    },
+    find: async () => [],
+  };
+
+  const transactionStatusCall = jest
+    .fn()
+    .mockResolvedValue({ hash: "STELLAR_TX", successful: true });
 
   const stellarServer = {
     loadAccount: jest
@@ -34,8 +88,8 @@ describe("Payments (side-by-side integration)", () => {
       .fn()
       .mockResolvedValue({ hash: "STELLAR_TX", successful: true }),
     transactions: jest.fn().mockReturnValue({
-      transaction: () => ({
-        call: () => Promise.resolve({ hash: "STELLAR_TX", successful: true }),
+      transaction: (hash: string) => ({
+        call: () => transactionStatusCall(hash),
       }),
     }),
     payments: jest.fn().mockReturnValue({
@@ -97,10 +151,20 @@ describe("Payments (side-by-side integration)", () => {
     })
       .overrideProvider(STELLAR_HORIZON_SERVER)
       .useValue(stellarServer)
+      .overrideProvider(getRepositoryToken(PaymentOperation))
+      .useValue(operationRepository)
       .overrideProvider(HttpService)
       .useValue(httpService)
       .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
+      .useValue({
+        canActivate: (context) => {
+          context.switchToHttp().getRequest().user = {
+            id: "test-user",
+            sub: "test-user",
+          };
+          return true;
+        },
+      })
       .overrideGuard(RolesGuard)
       .useValue({ canActivate: () => true })
       .compile();
@@ -127,6 +191,24 @@ describe("Payments (side-by-side integration)", () => {
     currency: "USD",
     destination: "acct_1",
     idempotencyKey: "idem-grantfox",
+  };
+
+  const createAndSignStellar = async (idempotencyKey: string) => {
+    const created = await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("x-payment-processor", "stellar")
+      .send({ ...stellarBody, idempotencyKey })
+      .expect(201);
+    const signed = await request(app.getHttpServer())
+      .post(`/api/v1/payments/${created.body.paymentId}/sign`)
+      .set("x-payment-processor", "stellar")
+      .send({
+        status: created.body.status,
+        unsignedTransaction: created.body.unsignedTransaction,
+        raw: created.body.raw,
+      })
+      .expect(200);
+    return { paymentId: created.body.paymentId, signedPayload: signed.body.signedPayload };
   };
 
   it("lists both auto-registered processors", async () => {
@@ -207,6 +289,107 @@ describe("Payments (side-by-side integration)", () => {
 
     expect(submitted.body.transactionHash).toBe("STELLAR_TX");
     expect(submitted.body.status).toBe("CONFIRMED");
+  });
+
+  it("reuses the saved create response for the same idempotency key", async () => {
+    const body = { ...stellarBody, idempotencyKey: "idem-create-recovery" };
+    const first = await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("x-payment-processor", "stellar")
+      .send(body)
+      .expect(201);
+    const retry = await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("x-payment-processor", "stellar")
+      .send(body)
+      .expect(201);
+
+    expect(retry.body.paymentId).toBe(first.body.paymentId);
+    expect(retry.body.recoveryId).toBe(first.body.recoveryId);
+    await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("x-payment-processor", "stellar")
+      .send({ ...body, amount: "11" })
+      .expect(409);
+  });
+
+  it("resumes a server-signable payment without client-held state", async () => {
+    const created = await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("x-payment-processor", "stellar")
+      .send({ ...stellarBody, idempotencyKey: "idem-browser-recovery" })
+      .expect(201);
+
+    const recovery = await request(app.getHttpServer())
+      .get(`/api/v1/payments/${created.body.paymentId}/recovery`)
+      .expect(200);
+    expect(recovery.body.nextStep).toContain("/recovery/resume");
+
+    const resumed = await request(app.getHttpServer())
+      .post(`/api/v1/payments/${created.body.paymentId}/recovery/resume`)
+      .expect(200);
+    expect(resumed.body.status).toBe("CONFIRMED");
+  });
+
+  it("resumes an interruption before broadcast using the same signed transaction", async () => {
+    const payment = await createAndSignStellar("idem-before-broadcast");
+    const operation = paymentOperations.find(
+      (row) => row.paymentId === payment.paymentId,
+    )!;
+    operation.state = PaymentOperationState.SUBMITTING;
+    operation.transactionHash = "expected-transaction-hash";
+    transactionStatusCall.mockRejectedValueOnce(new Error("not found"));
+    stellarServer.submitTransaction.mockClear();
+
+    const submitted = await request(app.getHttpServer())
+      .post(`/api/v1/payments/${payment.paymentId}/submit`)
+      .set("x-payment-processor", "stellar")
+      .send({ signedPayload: payment.signedPayload })
+      .expect(200);
+
+    expect(transactionStatusCall).toHaveBeenCalledWith("expected-transaction-hash");
+    expect(stellarServer.submitTransaction).toHaveBeenCalledTimes(1);
+    expect(submitted.body.status).toBe("CONFIRMED");
+  });
+
+  it("reconciles a submit timeout before resubmitting", async () => {
+    const payment = await createAndSignStellar("idem-during-broadcast");
+    stellarServer.submitTransaction.mockClear();
+    stellarServer.submitTransaction.mockRejectedValueOnce(new Error("timeout"));
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/payments/${payment.paymentId}/submit`)
+      .set("x-payment-processor", "stellar")
+      .send({ signedPayload: payment.signedPayload })
+      .expect(503);
+    const recovered = await request(app.getHttpServer())
+      .post(`/api/v1/payments/${payment.paymentId}/submit`)
+      .set("x-payment-processor", "stellar")
+      .send({ signedPayload: payment.signedPayload })
+      .expect(200);
+
+    expect(stellarServer.submitTransaction).toHaveBeenCalledTimes(1);
+    expect(recovered.body.transactionHash).toBe("STELLAR_TX");
+  });
+
+  it("returns the reconciled result if persistence fails after broadcast", async () => {
+    const payment = await createAndSignStellar("idem-after-broadcast");
+    stellarServer.submitTransaction.mockClear();
+    failSubmittedCheckpoint = true;
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/payments/${payment.paymentId}/submit`)
+      .set("x-payment-processor", "stellar")
+      .send({ signedPayload: payment.signedPayload })
+      .expect(503);
+    const recovered = await request(app.getHttpServer())
+      .post(`/api/v1/payments/${payment.paymentId}/submit`)
+      .set("x-payment-processor", "stellar")
+      .send({ signedPayload: payment.signedPayload })
+      .expect(200);
+
+    expect(stellarServer.submitTransaction).toHaveBeenCalledTimes(1);
+    expect(recovered.body.status).toBe("CONFIRMED");
   });
 
   it("disabling one processor does not affect the other", async () => {

@@ -90,18 +90,43 @@ export class RateLimitMiddleware implements NestMiddleware {
         this.resolveStrategy(process.env.RATE_LIMIT_DEFAULT_STRATEGY),
     };
 
-    const tracker = userId ? `user:${userId}` : `ip:${rawIp}`;
+    // Dual-layer limits: consume from BOTH the IP bucket and — for
+    // authenticated callers — the per-user bucket. The most restrictive
+    // surviving decision wins, so unauthenticated traffic cannot starve
+    // authenticated users and vice versa.
+    const ipTracker = `ip:${rawIp}`;
+    const userTracker = userId !== undefined ? `user:${userId}` : null;
     const scope = endpointRule ? endpointRule.pathPattern : path;
-    const key = `${tracker}:${scope}:${tier}`;
 
-    // 4. Consume Rate Limit
-    const decision = await this.rateLimiter.consume(
-      key,
+    const ipDecision = await this.rateLimiter.consume(
+      `${ipTracker}:${scope}:${tier}`,
       policy,
-      tracker,
+      ipTracker,
       scope,
       tier,
     );
+
+    let decision = ipDecision;
+    if (userTracker) {
+      const userDecision = await this.rateLimiter.consume(
+        `${userTracker}:${scope}:${tier}`,
+        policy,
+        userTracker,
+        scope,
+        tier,
+      );
+      decision =
+        !userDecision.allowed
+          ? userDecision
+          : !ipDecision.allowed
+            ? ipDecision
+            : {
+                ...userDecision,
+                remaining: Math.min(ipDecision.remaining, userDecision.remaining),
+                resetAt: Math.max(ipDecision.resetAt, userDecision.resetAt),
+              };
+    }
+    const tracker = userTracker ?? ipTracker;
 
     // 5. Apply Headers
     this.applyHeaders(res, policy, decision, tier);
@@ -189,6 +214,14 @@ export class RateLimitMiddleware implements NestMiddleware {
     },
     tier: string,
   ): void {
+    // RFC 9331 RateLimit header fields, plus the de-facto X-RateLimit-
+    // equivalents used by existing clients.
+    res.setHeader("RateLimit-Limit", policy.limit);
+    res.setHeader("RateLimit-Remaining", decision.remaining);
+    res.setHeader(
+      "RateLimit-Reset",
+      Math.max(0, Math.ceil((decision.resetAt - Date.now()) / 1000)),
+    );
     res.setHeader("X-RateLimit-Limit", policy.limit);
     res.setHeader("X-RateLimit-Remaining", decision.remaining);
     res.setHeader("X-RateLimit-Reset", new Date(decision.resetAt).toISOString());

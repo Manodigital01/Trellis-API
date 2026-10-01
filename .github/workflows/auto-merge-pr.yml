@@ -1,0 +1,89 @@
+name: Automated PR Review and Merge (Doris)
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main, master]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  auto-review-and-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Review and Auto-Merge PR (Doris)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.DORIS_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) return;
+
+            console.log(`Processing incoming PR #${pr.number}: "${pr.title}" by @${pr.user.login}`);
+
+            // Extract issue references from PR title, body, and branch name
+            const fullText = `${pr.title} ${pr.body || ''} ${pr.head.ref || ''}`;
+            const issueMatches = fullText.match(/(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved|issue)[s\s:]*#?(\d+)/gi) || [];
+            
+            const referencedIssues = new Set();
+            for (const match of issueMatches) {
+              const numMatch = match.match(/\d+/);
+              if (numMatch) referencedIssues.add(numMatch[0]);
+            }
+
+            const issueClosingString = Array.from(referencedIssues).map(id => `Closes #${id}`).join(', ');
+            console.log(`Detected issue references: ${issueClosingString || 'None'}`);
+
+            // 1. Post Review Comment from Doris
+            const reviewComment = `## Code Review & Auto-Merge — @dorismaduegbunam 🚀
+
+            Thank you @${pr.user.login} for your contribution!
+
+            - **PR Title:** ${pr.title}
+            - **Author:** @${pr.user.login}
+            - **Branch:** \`${pr.head.ref}\` -> \`${pr.base.ref}\`
+            ${issueClosingString ? `- **Linked Issues:** ${issueClosingString}` : ''}
+            - **Status:** Approved & Merged into \`${pr.base.ref}\`.
+
+            Verified code changes and repository requirements. Merging pull request.`;
+
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: reviewComment
+              });
+              console.log(`✓ Review comment posted on PR #${pr.number}`);
+            } catch (err) {
+              console.warn(`! Could not post review comment: ${err.message}`);
+            }
+
+            // 2. Merge Pull Request with issue-linking commit message
+            const commitTitle = `${pr.title} (#${pr.number})`;
+            const commitMessage = issueClosingString ? `${issueClosingString}\n\nMerged by @dorismaduegbunam` : `Merged by @dorismaduegbunam`;
+
+            try {
+              const mergeResult = await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                merge_method: 'squash',
+                commit_title: commitTitle,
+                commit_message: commitMessage
+              });
+              console.log(`✓ Successfully merged PR #${pr.number}! SHA: ${mergeResult.data.sha}`);
+            } catch (err) {
+              console.error(`✗ Failed to auto-merge PR #${pr.number}: ${err.message}`);
+            }

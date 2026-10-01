@@ -70,7 +70,11 @@ describe("AdminRoleController", () => {
       await expect(
         controller.assignRole("user-1", { role: Role.ADMIN }),
       ).resolves.toEqual({ id: "user-1", role: Role.ADMIN });
-      expect(userService.assignRole).toHaveBeenCalledWith("user-1", Role.ADMIN);
+      expect(userService.assignRole).toHaveBeenCalledWith("user-1", Role.ADMIN, {
+        actorId: "user-1",
+        actorRole: Role.ADMIN,
+        reason: undefined,
+      });
     });
 
     it("propagates BadRequestException for a conflicting role", async () => {
@@ -95,7 +99,11 @@ describe("AdminRoleController", () => {
         id: "user-1",
         role: Role.USER,
       });
-      expect(userService.assignRole).toHaveBeenCalledWith("user-1", Role.USER);
+      expect(userService.assignRole).toHaveBeenCalledWith("user-1", Role.USER, {
+        actorId: "user-1",
+        actorRole: Role.ADMIN,
+        reason: "Administrator reset the user to the least-privileged role",
+      });
     });
   });
 

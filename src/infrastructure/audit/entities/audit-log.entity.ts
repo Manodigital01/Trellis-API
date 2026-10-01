@@ -63,6 +63,11 @@ export enum AuditLogAction {
   PERMISSION_CHANGE = "PERMISSION_CHANGE",
 }
 
+export enum AuditLogVisibility {
+  PUBLIC = "PUBLIC",
+  MAINTAINER = "MAINTAINER",
+}
+
 @Entity("audit_logs")
 @Index(["userId", "createdAt"])
 @Index(["action", "createdAt"])
@@ -110,6 +115,10 @@ export class AuditLog {
   @CreateDateColumn()
   @Index()
   createdAt: Date;
+
+  @Column({ type: "enum", enum: AuditLogVisibility, default: AuditLogVisibility.MAINTAINER })
+  @Index()
+  visibility: AuditLogVisibility;
 
   @Column({ type: "timestamptz", nullable: true })
   archivedAt: Date | null;

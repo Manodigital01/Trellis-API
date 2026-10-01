@@ -16,7 +16,7 @@ export class SlowQueryLogger {
 
   constructor() {
     this.slowQueryThresholdMs = parseInt(
-      process.env.SLOW_QUERY_THRESHOLD_MS ?? "1000",
+      process.env.SLOW_QUERY_THRESHOLD_MS ?? "500",
       10,
     );
     this.maxStoredQueries = parseInt(

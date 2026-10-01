@@ -13,6 +13,7 @@ import { Wallet, WalletStatus } from "./entities/wallet.entity";
 import { User } from "../user/entities/user.entity";
 import { ChallengeService } from "./challenge.service";
 import { EmailService } from "./email.service";
+import { normalizeEmail } from "../../common/decorators/is-rfc-email.decorator";
 
 export interface RecoveryMethod {
   type: "backup_code" | "email" | "social";
@@ -173,7 +174,7 @@ export class SessionRecoveryService {
     sessionId: string;
     message: string;
   }> {
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
     const user = await this.userRepository.findOne({
       where: { email: normalizedEmail, emailVerified: true },

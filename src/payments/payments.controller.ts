@@ -8,6 +8,8 @@ import {
   Param,
   Post,
   Query,
+  Req,
+  UnauthorizedException,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -43,8 +45,8 @@ const PROCESSOR_HEADER = "x-payment-processor";
  * `PAYMENTS_DEFAULT_PROCESSOR` env default, then to the sole enabled processor.
  *
  * Guarded by JWT (+ the global KYC guard). Enable/disable are admin-only.
- * The create → sign → submit flow is stateless: each step's output is posted
- * back in as the next step's body.
+ * The create → sign → submit flow is checkpointed so interrupted operations
+ * can be reconciled without blindly repeating external side effects.
  */
 @ApiTags("Payments")
 @ApiBearerAuth()
@@ -60,10 +62,12 @@ export class PaymentsController {
     @Body() dto: CreatePaymentDto,
     @Headers(PROCESSOR_HEADER) headerProcessor?: string,
     @Query("processor") queryProcessor?: string,
+    @Req() request?: any,
   ): Promise<CreatedPayment> {
     return this.paymentsService.createPayment(
       dto,
       queryProcessor ?? headerProcessor,
+      this.ownerId(request),
     );
   }
 
@@ -76,10 +80,12 @@ export class PaymentsController {
     @Body() dto: SignTransactionDto,
     @Headers(PROCESSOR_HEADER) headerProcessor?: string,
     @Query("processor") queryProcessor?: string,
+    @Req() request?: any,
   ): Promise<SignedTransaction> {
     return this.paymentsService.signTransaction(
       { paymentId: id, ...dto },
       queryProcessor ?? headerProcessor,
+      this.ownerId(request),
     );
   }
 
@@ -92,10 +98,12 @@ export class PaymentsController {
     @Body() dto: SubmitTransactionDto,
     @Headers(PROCESSOR_HEADER) headerProcessor?: string,
     @Query("processor") queryProcessor?: string,
+    @Req() request?: any,
   ): Promise<SubmittedTransaction> {
     return this.paymentsService.submitTransaction(
       { paymentId: id, ...dto },
       queryProcessor ?? headerProcessor,
+      this.ownerId(request),
     );
   }
 
@@ -111,6 +119,34 @@ export class PaymentsController {
       id,
       queryProcessor ?? headerProcessor,
     );
+  }
+
+  @Get("recovery/stuck")
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiOperation({ summary: "List stale payment operations for maintainers" })
+  getStuckOperations(
+    @Query("olderThanMinutes") olderThanMinutes?: string,
+  ) {
+    const parsed = Number(olderThanMinutes);
+    return this.paymentsService.getStuckOperations(
+      Number.isFinite(parsed) && parsed > 0 ? parsed : 15,
+    );
+  }
+
+  @Get(":id/recovery")
+  @ApiOperation({ summary: "Get recovery status and next steps for a payment" })
+  @ApiParam({ name: "id", description: "Payment id from createPayment" })
+  getRecovery(@Param("id") id: string, @Req() request?: any) {
+    return this.paymentsService.getRecovery(id, this.ownerId(request));
+  }
+
+  @Post(":id/recovery/resume")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Resume or reconcile an interrupted payment" })
+  @ApiParam({ name: "id", description: "Payment id from createPayment" })
+  resumePayment(@Param("id") id: string, @Req() request?: any) {
+    return this.paymentsService.resumePayment(id, this.ownerId(request));
   }
 
   @Post(":id/refund")
@@ -153,5 +189,13 @@ export class PaymentsController {
   @ApiParam({ name: "name", description: "Processor name, e.g. 'stellar'" })
   disableProcessor(@Param("name") name: string): PaymentProcessorInfo[] {
     return this.paymentsService.disableProcessor(name);
+  }
+
+  private ownerId(request?: any): string {
+    const id = request?.user?.sub ?? request?.user?.id;
+    if (!id) {
+      throw new UnauthorizedException("Authenticated user identity is missing.");
+    }
+    return String(id);
   }
 }

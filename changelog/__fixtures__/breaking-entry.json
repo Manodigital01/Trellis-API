@@ -1,0 +1,39 @@
+{
+  "$schema": "./schema/protocol-changes.schema.json",
+  "schemaVersion": "1.0.0",
+  "project": "trellis-api",
+  "entries": [
+    {
+      "version": "0.3.0",
+      "date": "2026-09-27",
+      "status": "unreleased",
+      "impact": "breaking",
+      "title": "Response envelope replaced by the disclosure block",
+      "summary": "Every reconciliation response is wrapped in a disclosure envelope.",
+      "protocolSurfaces": [
+        {
+          "kind": "http",
+          "method": "GET",
+          "path": "/reconcile/stellar/tx/{txid}",
+          "description": "The transaction payload moves under data."
+        }
+      ],
+      "migration": {
+        "required": true,
+        "automated": false,
+        "steps": [
+          "Send ?details=standard to opt into the new response envelope."
+        ],
+        "notes": "The legacy envelope is removed in 1.0.0."
+      },
+      "breakingChanges": [
+        {
+          "description": "The transaction payload moved under data.",
+          "replacement": "Read data.transaction instead of the top-level payload.",
+          "issue": 125
+        }
+      ],
+      "relatedIssues": [125]
+    }
+  ]
+}

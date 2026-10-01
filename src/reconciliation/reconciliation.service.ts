@@ -228,9 +228,17 @@ export class ReconciliationService {
       const payload = (await response.json()) as {
         _embedded?: { records?: Array<Record<string, unknown>> };
       };
-      const records = payload._embedded?.records ?? [];
+      const records = payload._embedded?.records;
+      if (records !== undefined && !Array.isArray(records)) {
+        // A body of the wrong shape is a bug in the peer, not an empty
+        // account: fail loudly so the poll is retried instead of silently
+        // skipping every payment in the page.
+        throw new Error(
+          "Horizon returned a payment list that is not an array; refusing to advance the cursor"
+        );
+      }
       let ingested = 0;
-      for (const record of records) {
+      for (const record of records ?? []) {
         if (
           record.type !== "payment" ||
           typeof record.transaction_hash !== "string"

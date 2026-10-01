@@ -159,4 +159,28 @@ export class PortfolioManagementController {
   ): Promise<PortfolioResponseDto> {
     return this.portfolioService.archivePortfolio(id, PortfolioStatus.ARCHIVED);
   }
+
+  @Post(":id/transition")
+  @ApiOperation({ summary: "Execute a guarded lifecycle state transition on a portfolio" })
+  @UseGuards(PortfolioOwnerGuard)
+  @ApiResponse({
+    status: 200,
+    description: "Lifecycle transition succeeded",
+  })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid state transition",
+    type: ApiErrorDto,
+  })
+  async transitionPortfolio(
+    @Param("id") id: string,
+    @Body() dto: { targetState: string; reason?: string },
+    @Request() req: any,
+  ) {
+    return this.portfolioService.transitionPortfolioState(id, dto.targetState, {
+      actorId: req.user?.id,
+      actorRole: req.user?.role,
+      reason: dto.reason,
+    });
+  }
 }

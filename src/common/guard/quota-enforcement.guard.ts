@@ -25,6 +25,20 @@ import {
 } from "../decorators/quota.decorator";
 import { QuotaBudgetService } from "../quota/quota-budget.service";
 
+export const TIER_MONTHLY_LIMITS = {
+  free: 10_000,
+  pro: 1_000_000,
+  enterprise: Number.POSITIVE_INFINITY,
+} as const;
+
+export type QuotaTier = keyof typeof TIER_MONTHLY_LIMITS;
+
+export interface QuotaCounter {
+  increment(key: string, ttlSeconds: number): Promise<number>;
+}
+
+export const QUOTA_COUNTER_TOKEN = Symbol.for("QUOTA_COUNTER");
+
 @Injectable()
 export class QuotaEnforcementGuard implements CanActivate {
   private readonly logger = new Logger(QuotaEnforcementGuard.name);
@@ -32,6 +46,8 @@ export class QuotaEnforcementGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly budget: QuotaBudgetService,
+    @Optional()
+    private readonly counter?: QuotaCounter,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -71,6 +87,7 @@ export class QuotaEnforcementGuard implements CanActivate {
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
           error: "Quota Exceeded",
+          code: "QUOTA_EXCEEDED",
           message: result.message,
           resource: options.resource,
           limit: result.limit,
@@ -79,6 +96,70 @@ export class QuotaEnforcementGuard implements CanActivate {
           resetAt: result.resetAt.toISOString(),
           remediation:
             "Wait for your quota window to reset, or contact your administrator to request a limit increase.",
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    return true;
+  }
+
+  /**
+   * Monthly tier-based quota enforcement.
+   *
+   * Increments the Redis key `quota:{apiKey}:{YYYY-MM}` for the current month,
+   * compares the count against the tenant plan tier limit, attaches
+   * `X-Quota-Limit` / `X-Quota-Remaining` to the response, and returns 429
+   * with `QUOTA_EXCEEDED` when the monthly quota is exhausted.
+   */
+  async enforceMonthlyQuota(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const response = context.switchToHttp().getResponse();
+
+    const apiKey = this.resolveApiKey(request);
+    const tier = this.resolveTier(request);
+    const limit = TIER_MONTHLY_LIMITS[tier];
+
+    // Enterprise is unlimited — still attach informational headers.
+    if (!isFinite(limit)) {
+      this.setQuotaHYXRs(response, -1, -1, this.nextMonthReset());
+      return true;
+    }
+
+    const now = new Date();
+    const resetAt = this.nextMonthReset(now);
+    const key = `quota:${apiKey}:${this.monthKey(now)}`;
+
+    if (!this.counter) {
+      // No Redis backend configured — fail open but still expose headers.
+      this.setQuotaHYXRs(response, limit, limit, resetAt);
+      return true;
+    }
+
+    const ttlSeconds = Math.max(1, Math.ceil((resetAt.getTime() - now.getTime()) / 1000));
+    const used = await this.counter.increment(key, ttlSeconds);
+    const remaining = Math.max(0, limit - used);
+
+    this.setQuotaHYXRs(response, limit, remaining, resetAt);
+
+    if (used > limit) {
+      this.logger.warn(
+        `[quota] API key ${apiKey} (${tier}) exhausted monthly quota ` +
+          `${used}/${limit} for ${this.monthKey(now)}`,
+      );
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          error: "Quota Exceeded",
+          code: "QUOTA_EXCEEDED",
+          message: `Monthly API call quota exceeded for ${tier} tier.`,
+          tier,
+          limit,
+          used,
+          remaining: 0,
+          resetAt: resetAt.toISOString(),
+          remediation:
+            "Upgrade your subscription plan or wait for the monthly quota to reset.",
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );
@@ -97,7 +178,44 @@ export class QuotaEnforcementGuard implements CanActivate {
     return `ip:${request.ip ?? "unknown"}`;
   }
 
-  private setHeaders(
+  private resolveApiKey(request: any): string {
+    const headers = request.headers ?? {};
+    const raw =
+      headers["x-api-key"] ??
+      headers["api-xey"] ??
+      request.apiKey ??
+      request.user?.apiKey ??
+      request.user?.sub ??
+      request.user?.id;
+    if (typeof raw === "string" && raw.length > 0) return raw;
+    return this.resolveActor(request);
+  }
+
+  private resolveTier(request: any): QuotaTier {
+    const candidate =
+      request.user?.plan?.tier ??
+      request.user?.tier ??
+      request.tenant?.tier ??
+      request.headers?.["x-plan-tier"] ??
+      request.headers?.["x-tier"];
+    const normalized = typeof candidate === "string" ? candidate.toLowerCase() : "";
+    if (normalized in TIER_MONTHLY_LIMITS) {
+      return normalized as QuotaTier;
+    }
+    return "free";
+  }
+
+  private monthKey(date: Date): string {
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    return `${year}-${month}`;
+  }
+
+  private nextMonthReset(from: Date = new Date()): Date {
+    return new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 1, 0, 0, 0, 0));
+  }
+
+  private setQuotaHeaders(
     response: any,
     limit: number,
     remaining: number,
@@ -121,5 +239,14 @@ export class QuotaEnforcementGuard implements CanActivate {
         // header setting is best-effort
       }
     }
+  }
+
+  private setHeaders(
+    response: any,
+    limit: number,
+    remaining: number,
+    resetAt: Date,
+  ): void {
+    this.setQuotaHeaders(response, limit, remaining, resetAt);
   }
 }

@@ -2,11 +2,12 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { LessThan, Repository } from "typeorm";
 import { Cron, CronExpression } from "@nestjs/schedule";
-import { AuditLog } from "./entities/audit-log.entity";
+import { AuditLog, AuditLogVisibility } from "./entities/audit-log.entity";
 import { QueryAuditLogDto, ExportAuditLogDto } from "./dto/query-audit-log.dto";
 import { AuditLogListResponseDto } from "./dto/audit-log-response.dto";
 import { ExportSigningService } from "./algorithms/export-signing.service";
 import { CursorPaginationService } from "../../common/pagination/cursor-pagination.service";
+import { DistributedLock } from "../distributed-lock/distributed-lock.decorator";
 
 const RETENTION_YEARS = 7;
 const ARCHIVE_AFTER_YEARS = 1;
@@ -49,6 +50,7 @@ export class AuditLogService {
     userAgent?: string;
     details?: string;
     metadata?: Record<string, unknown>;
+    visibility?: AuditLogVisibility;
   }): Promise<AuditLog> {
     const searchText = [
       entry.action,
@@ -97,6 +99,47 @@ export class AuditLogService {
 
     const [rows, total] = await qb.getManyAndCount();
     const hasNext = Boolean(dto.cursor && rows.length > limit);
+    const data = hasNext ? rows.slice(0, limit) : rows;
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      nextCursor:
+        hasNext && data.length > 0
+          ? this.cursorPagination.encode({
+              createdAt: data[data.length - 1].createdAt,
+              id: data[data.length - 1].id,
+            })
+          : null,
+    };
+  }
+
+  async getTimeline(
+    userId: string,
+    page: number = 1,
+    limit: number = 20,
+    cursor?: string
+  ): Promise<AuditLogListResponseDto> {
+    const qb = this.repo.createQueryBuilder("log");
+    
+    qb.where("log.userId = :userId", { userId })
+      .andWhere("log.visibility = :visibility", { visibility: AuditLogVisibility.PUBLIC });
+
+    if (cursor) {
+      this.cursorPagination.applyDescendingKeyset(qb, "log", cursor);
+      qb.take(limit + 1);
+    } else {
+      qb.orderBy("log.createdAt", "DESC")
+        .addOrderBy("log.id", "DESC")
+        .skip((page - 1) * limit)
+        .take(limit);
+    }
+
+    const [rows, total] = await qb.getManyAndCount();
+    const hasNext = Boolean(cursor && rows.length > limit);
     const data = hasNext ? rows.slice(0, limit) : rows;
 
     return {
@@ -167,6 +210,7 @@ export class AuditLogService {
   // Cold-storage transfer is delegated to an external sink (S3/Glacier);
   // this only flips the archivedAt marker once the transfer succeeds.
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  @DistributedLock("audit:archive-old-logs", 30 * 60_000)
   async archiveOldLogs(
     coldStorageWriter?: (logs: AuditLog[]) => Promise<void>,
   ) {
@@ -193,6 +237,7 @@ export class AuditLogService {
 
   // Permanently deletes unprotected logs past the 7-year retention period.
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  @DistributedLock("audit:enforce-retention", 30 * 60_000)
   async enforceRetention(): Promise<RetentionReport> {
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - RETENTION_YEARS);

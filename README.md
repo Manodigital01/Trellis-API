@@ -52,6 +52,10 @@ Provide the off‑chain infrastructure required for agents, oracles, and operato
 - Secure by default — Wallet‑based auth flows, least privilege for service accounts, rigorous input validation, and rate limiting.
 - Observable & auditable — Structured logs, metrics, traces, and persistent event history for debugging and compliance.
 
+### Signed Oracle payloads
+
+Oracle payloads are serialized as canonical JSON before hashing, EIP-712 signing, and contract submission. Object keys are sorted recursively, JSON whitespace is omitted, and negative zero is normalized to zero. Non-finite numbers, unsafe integer values, undefined values, and non-plain objects are rejected; encode large integer amounts as decimal strings. Payload type values are trimmed and lowercased. Property names and string values keep their original casing and whitespace. Verification attempts the legacy insertion-order representation for older signatures when the original property order is available; new payloads always use canonical serialization.
+
 ## High‑level architecture (NestJS mapping)
 
 - NestJS Modules — Logical separation: ComputeBridgeModule, DashboardModule, AuthModule, IndexerModule, OracleModule, SimulatorModule, SubmitterModule.
@@ -364,6 +368,8 @@ POST /api/v1/exports
 
 ## Documentation
 
+- [docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md) - Incident triage, mitigation, rollback, and recovery procedures
+
 Every markdown document in this repository, grouped by topic:
 
 ### Project
@@ -386,6 +392,7 @@ Every markdown document in this repository, grouped by topic:
 - [docs/MULTI_WALLET_MANAGEMENT.md](docs/MULTI_WALLET_MANAGEMENT.md) - Multi-wallet support and related API endpoints
 - [docs/module-registry.md](docs/module-registry.md) - How the pluggable module registry installs packages without touching core
 - [docs/stellar-reconciliation.md](docs/stellar-reconciliation.md) - Reconciliation of confirmed Stellar payments against internal invoices
+- [docs/POLICY_ENGINE.md](docs/POLICY_ENGINE.md) - Configurable business-rule evaluation and trading policy settings
 
 ### Portfolio Optimization
 

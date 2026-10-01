@@ -11,6 +11,11 @@ export interface QuotaEnforceOptions {
   /** Which resource bucket to charge. */
   resource: ResourceKey;
   /**
+   * Tenant plan tier used to resolve the monthly API call limit.
+   * Free: 10k, Pro: 1M, Enterprise: unlimited.
+   */
+  tier?: "free" | "pro" | "enterprise";
+  /**
    * Fixed cost per request.  For variable-cost operations (e.g. AI tokens)
    * leave this undefined and call QuotaBudgetService.consume() directly in
    * the service layer, passing the actual cost after the operation completes.
@@ -21,6 +26,11 @@ export interface QuotaEnforceOptions {
    * and merely logs a warning.  Useful for soft-limits on non-critical paths.
    */
   soft?: boolean;
+  /**
+   * When true, the guard emits X-Quota-Limit / X-Quota-Remaining headers
+   * and returns 429 QUOTA_EXCEEDED once the monthly tier limit is exhausted.
+   */
+  enforceMonthly?: boolean;
 }
 
 /**

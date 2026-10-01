@@ -31,7 +31,10 @@ import {
   SignedTransaction,
   SubmittedTransaction,
 } from "../../interfaces/payment-processor.interface";
-import { STELLAR_HORIZON_SERVER, STELLAR_PROCESSOR_NAME } from "./stellar.constants";
+import {
+  STELLAR_HORIZON_SERVER,
+  STELLAR_PROCESSOR_NAME,
+} from "./stellar.constants";
 
 /** Config accepted by {@link StellarAdapter.initialize}. */
 export interface StellarConfig {
@@ -70,6 +73,7 @@ export class StellarAdapter implements IPaymentProcessor<
     requiresClientSideSigning: false,
     currencies: ["XLM"],
   };
+  readonly supportsSafeSubmissionRetry = true;
 
   private readonly logger = new Logger(StellarAdapter.name);
   private networkPassphrase: string;
@@ -186,6 +190,39 @@ export class StellarAdapter implements IPaymentProcessor<
       };
     } catch (err) {
       throw this.toStellarError(err, "Failed to submit transaction to Horizon");
+    }
+  }
+
+  getSubmissionHash(signed: SignedTransaction): string {
+    const transaction = TransactionBuilder.fromXdr(
+      signed.signedPayload,
+      this.networkPassphrase,
+    );
+    return Buffer.from(transaction.hash()).toString("hex");
+  }
+
+  matchesCreatedPayment(
+    created: CreatedPayment,
+    signed: SignedTransaction,
+  ): boolean {
+    if (typeof created.unsignedTransaction !== "string") {
+      return false;
+    }
+    try {
+      const unsigned = TransactionBuilder.fromXdr(
+        created.unsignedTransaction,
+        this.networkPassphrase,
+      );
+      const submitted = TransactionBuilder.fromXdr(
+        signed.signedPayload,
+        this.networkPassphrase,
+      );
+      return (
+        Buffer.from(unsigned.hash()).toString("hex") ===
+        Buffer.from(submitted.hash()).toString("hex")
+      );
+    } catch {
+      return false;
     }
   }
 

@@ -28,6 +28,14 @@ import { ConstraintOptimizer } from "../algorithms/constraint-optimizer";
 import { PerformanceAnalyticsService } from "./performance-analytics.service";
 import { PortfolioConstraintService } from "./portfolio-constraint.service";
 import { AuditLogService } from "src/infrastructure/audit/audit-log.service";
+import { SensitiveActionAuditService } from "src/infrastructure/audit/sensitive-actions/sensitive-action-audit.service";
+import { SensitiveAction } from "src/infrastructure/audit/sensitive-actions/sensitive-action.enum";
+import {
+  PortfolioLifecycleState,
+  PortfolioStateMachine,
+  derivePortfolioLifecycleState,
+} from "src/common/lifecycle/record-state-machines";
+import { InvalidStateTransitionException } from "src/common/lifecycle/invalid-state-transition.exception";
 
 @Injectable()
 export class PortfolioService {
@@ -45,6 +53,7 @@ export class PortfolioService {
     private performanceService: PerformanceAnalyticsService,
     private portfolioConstraintService: PortfolioConstraintService,
     private auditLogService: AuditLogService,
+    private sensitiveActionAudit: SensitiveActionAuditService,
   ) {}
 
   private validatePortfolioName(name: string): void {
@@ -69,18 +78,91 @@ export class PortfolioService {
   async deletePortfolio(portfolioId: string): Promise<void> {
     const portfolio = await this.getPortfolio(portfolioId);
     await this.portfolioRepository.remove(portfolio);
+    await this.recordPortfolioChange(
+      portfolio.userId,
+      "portfolio",
+      portfolioId,
+      this.portfolioSnapshot(portfolio),
+      { deleted: true },
+      "Portfolio deleted by its owner",
+    );
   }
 
   async archivePortfolio(
     portfolioId: string,
-    status: PortfolioStatus,
+    status: PortfolioStatus = PortfolioStatus.ARCHIVED,
+    auditContext?: { actorId?: string; actorRole?: string; reason?: string },
   ): Promise<Portfolio> {
     const portfolio = await this.getPortfolio(portfolioId);
-    if (status === PortfolioStatus.ARCHIVED) {
-      portfolio.status = PortfolioStatus.ARCHIVED;
+    const currentLifecycle = derivePortfolioLifecycleState(portfolio);
+    await PortfolioStateMachine.assertCanTransition(
+      currentLifecycle,
+      PortfolioLifecycleState.ARCHIVED,
+      auditContext,
+      { resourceId: portfolioId, resourceType: "portfolio" },
+    );
+
+    const before = this.portfolioSnapshot(portfolio);
+    portfolio.status = PortfolioStatus.ARCHIVED;
+    portfolio.deletedAt = new Date();
+    const saved = await this.portfolioRepository.save(portfolio);
+    await this.recordPortfolioChange(
+      auditContext?.actorId ?? saved.userId,
+      "portfolio",
+      saved.id,
+      before,
+      this.portfolioSnapshot(saved),
+      auditContext?.reason || "Portfolio archived",
+    );
+    return saved;
+  }
+
+  async transitionPortfolioState(
+    portfolioId: string,
+    targetState: PortfolioLifecycleState | string,
+    auditContext?: { actorId?: string; actorRole?: string; reason?: string },
+  ): Promise<{
+    portfolio: Portfolio;
+    lifecycleState: PortfolioLifecycleState;
+    isTerminal: boolean;
+    allowedTransitions: string[];
+  }> {
+    const portfolio = await this.getPortfolio(portfolioId);
+    const currentLifecycle = derivePortfolioLifecycleState(portfolio);
+    const target = targetState as PortfolioLifecycleState;
+
+    await PortfolioStateMachine.assertCanTransition(
+      currentLifecycle,
+      target,
+      auditContext,
+      { resourceId: portfolioId, resourceType: "portfolio" },
+    );
+
+    const before = this.portfolioSnapshot(portfolio);
+    portfolio.status = target as unknown as PortfolioStatus;
+    if (target === PortfolioLifecycleState.ARCHIVED) {
       portfolio.deletedAt = new Date();
+    } else {
+      portfolio.deletedAt = null;
     }
-    return this.portfolioRepository.save(portfolio);
+
+    const saved = await this.portfolioRepository.save(portfolio);
+    await this.recordPortfolioChange(
+      auditContext?.actorId ?? saved.userId,
+      "portfolio",
+      saved.id,
+      before,
+      this.portfolioSnapshot(saved),
+      auditContext?.reason || `Portfolio lifecycle transition: ${currentLifecycle} -> ${target}`,
+    );
+
+    const model = PortfolioStateMachine.deriveStateModel(target);
+    return {
+      portfolio: saved,
+      lifecycleState: target,
+      isTerminal: model.isTerminal,
+      allowedTransitions: model.allowedTransitions,
+    };
   }
 
   async setTargetAllocation(
@@ -88,8 +170,18 @@ export class PortfolioService {
     allocations: { [ticker: string]: number },
   ): Promise<Portfolio> {
     const portfolio = await this.getPortfolio(portfolioId);
+    const before = this.portfolioSnapshot(portfolio);
     portfolio.targetAllocation = allocations;
-    return this.portfolioRepository.save(portfolio);
+    const saved = await this.portfolioRepository.save(portfolio);
+    await this.recordPortfolioChange(
+      saved.userId,
+      "portfolio",
+      saved.id,
+      before,
+      this.portfolioSnapshot(saved),
+      "Portfolio target allocation changed",
+    );
+    return saved;
   }
 
   async createPortfolio(
@@ -117,7 +209,16 @@ export class PortfolioService {
       rebalanceThreshold: dto.rebalanceThreshold || 5,
     });
 
-    return this.portfolioRepository.save(portfolio);
+    const saved = await this.portfolioRepository.save(portfolio);
+    await this.recordPortfolioChange(
+      saved.userId,
+      "portfolio",
+      saved.id,
+      { created: false },
+      this.portfolioSnapshot(saved),
+      "Portfolio created",
+    );
+    return saved;
   }
 
   async getPortfolio(portfolioId: string): Promise<Portfolio> {
@@ -146,24 +247,42 @@ export class PortfolioService {
     dto: UpdatePortfolioDto,
   ): Promise<Portfolio> {
     const portfolio = await this.getPortfolio(portfolioId);
+    const before = this.portfolioSnapshot(portfolio);
 
     if (dto.name && dto.name !== portfolio.name) {
       this.validatePortfolioName(dto.name);
     }
 
-    if (dto.status === PortfolioStatus.ARCHIVED) {
-      portfolio.status = PortfolioStatus.ARCHIVED;
-      portfolio.deletedAt = new Date();
-    } else if (dto.status) {
+    if (dto.status && dto.status !== portfolio.status) {
+      const currentLifecycle = derivePortfolioLifecycleState(portfolio);
+      const targetLifecycle = dto.status as unknown as PortfolioLifecycleState;
+      await PortfolioStateMachine.assertCanTransition(
+        currentLifecycle,
+        targetLifecycle,
+        undefined,
+        { resourceId: portfolioId, resourceType: "portfolio" },
+      );
+
       portfolio.status = dto.status;
-      if (dto.status === PortfolioStatus.ACTIVE) {
+      if (dto.status === PortfolioStatus.ARCHIVED) {
+        portfolio.deletedAt = new Date();
+      } else if (dto.status === PortfolioStatus.ACTIVE) {
         portfolio.deletedAt = null;
       }
     }
 
     Object.assign(portfolio, dto);
 
-    return this.portfolioRepository.save(portfolio);
+    const saved = await this.portfolioRepository.save(portfolio);
+    await this.recordPortfolioChange(
+      saved.userId,
+      "portfolio",
+      saved.id,
+      before,
+      this.portfolioSnapshot(saved),
+      "Portfolio details changed",
+    );
+    return saved;
   }
 
   /**
@@ -208,6 +327,15 @@ export class PortfolioService {
 
     const saved = await this.portfolioAssetRepository.save(asset);
 
+    await this.recordPortfolioChange(
+      portfolio.userId,
+      "portfolio_holding",
+      saved.id,
+      { created: false, portfolioId },
+      this.holdingSnapshot(saved),
+      "Holding added to portfolio",
+    );
+
     await this.updatePortfolioMetrics(portfolioId);
 
     return saved;
@@ -230,6 +358,7 @@ export class PortfolioService {
     if (!holding) {
       throw new BadRequestException("Holding not found");
     }
+    const before = this.holdingSnapshot(holding);
 
     // Update fields
     if (dto.quantity !== undefined) {
@@ -266,6 +395,15 @@ export class PortfolioService {
 
     const updated = await this.portfolioAssetRepository.save(holding);
 
+    await this.recordPortfolioChange(
+      portfolio.userId,
+      "portfolio_holding",
+      updated.id,
+      before,
+      this.holdingSnapshot(updated),
+      "Portfolio holding value or quantity changed",
+    );
+
     // Update portfolio metrics
     await this.updatePortfolioMetrics(portfolioId);
 
@@ -276,6 +414,7 @@ export class PortfolioService {
    * Remove holding from portfolio
    */
   async removeHolding(portfolioId: string, holdingId: string): Promise<void> {
+    const portfolio = await this.getPortfolio(portfolioId);
     const holding = await this.portfolioAssetRepository.findOne({
       where: { id: holdingId, portfolioId },
     });
@@ -283,8 +422,17 @@ export class PortfolioService {
     if (!holding) {
       throw new BadRequestException("Holding not found");
     }
+    const before = this.holdingSnapshot(holding);
 
     await this.portfolioAssetRepository.remove(holding);
+    await this.recordPortfolioChange(
+      portfolio.userId,
+      "portfolio_holding",
+      holdingId,
+      before,
+      { deleted: true, portfolioId },
+      "Holding removed from portfolio",
+    );
 
     // Update portfolio metrics
     await this.updatePortfolioMetrics(portfolioId);
@@ -322,6 +470,8 @@ export class PortfolioService {
     if (!asset) {
       throw new NotFoundException("Asset not found");
     }
+    const portfolio = await this.getPortfolio(asset.portfolioId);
+    const before = this.holdingSnapshot(asset);
 
     if (currentPrice < 0) {
       throw new BadRequestException("Price cannot be negative");
@@ -338,6 +488,14 @@ export class PortfolioService {
     }
 
     const updated = await this.portfolioAssetRepository.save(asset);
+    await this.recordPortfolioChange(
+      portfolio.userId,
+      "portfolio_holding",
+      updated.id,
+      before,
+      this.holdingSnapshot(updated),
+      "Holding market price changed",
+    );
 
     // Update portfolio metrics
     await this.updatePortfolioMetrics(asset.portfolioId);
@@ -350,6 +508,7 @@ export class PortfolioService {
    */
   async updatePortfolioMetrics(portfolioId: string): Promise<void> {
     const portfolio = await this.getPortfolio(portfolioId);
+    const before = this.portfolioSnapshot(portfolio);
     const assets = await this.portfolioAssetRepository.find({
       where: { portfolioId },
     });
@@ -374,6 +533,14 @@ export class PortfolioService {
 
     await this.portfolioRepository.save(portfolio);
     await this.portfolioAssetRepository.save(assets);
+    await this.recordPortfolioChange(
+      portfolio.userId,
+      "portfolio",
+      portfolio.id,
+      before,
+      this.portfolioSnapshot(portfolio),
+      "Portfolio market value and allocation updated",
+    );
 
     // Keep performance history current whenever value/allocation changes.
     try {
@@ -428,6 +595,56 @@ export class PortfolioService {
         evaluation.violations.map((v) => v.message).join(" "),
       );
     }
+  }
+
+  private portfolioSnapshot(portfolio: Portfolio): Record<string, unknown> {
+    return {
+      id: portfolio.id,
+      userId: portfolio.userId,
+      name: portfolio.name,
+      status: portfolio.status,
+      totalValue: portfolio.totalValue,
+      currentAllocation: portfolio.currentAllocation,
+      targetAllocation: portfolio.targetAllocation,
+      autoRebalanceEnabled: portfolio.autoRebalanceEnabled,
+      rebalanceFrequency: portfolio.rebalanceFrequency,
+      rebalanceThreshold: portfolio.rebalanceThreshold,
+    };
+  }
+
+  private holdingSnapshot(holding: PortfolioAsset): Record<string, unknown> {
+    return {
+      id: holding.id,
+      portfolioId: holding.portfolioId,
+      ticker: holding.ticker,
+      name: holding.name,
+      chain: holding.chain,
+      assetType: holding.type,
+      quantity: holding.quantity,
+      currentPrice: holding.currentPrice,
+      value: holding.value,
+      costBasis: holding.costBasis,
+      unrealizedGain: holding.unrealizedGain,
+    };
+  }
+
+  private recordPortfolioChange(
+    actorId: string,
+    resourceType: string,
+    resourceId: string,
+    beforeState: Record<string, unknown>,
+    afterState: Record<string, unknown>,
+    reason: string,
+  ): Promise<unknown> {
+    return this.sensitiveActionAudit.recordSensitiveAction({
+      action: SensitiveAction.PORTFOLIO_RECORD_CHANGED,
+      actorId,
+      resourceType,
+      resourceId,
+      beforeState,
+      afterState,
+      reason,
+    });
   }
 
   async runOptimization(

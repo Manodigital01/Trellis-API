@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import {
   execute,
   ExecutionResult,
@@ -14,6 +14,9 @@ import { AgentReviewsService } from "src/discovery/reviews/agent-reviews.service
 import { AgentReview } from "src/discovery/reviews/entities/agent-review.entity";
 import { UserService } from "src/core/user/user.service";
 import { AgentReviewAuthorLoader } from "./loaders/agent-review-author.loader";
+
+import { createDepthLimitRule } from "./rules/depth-limit.rule";
+import { createQueryComplexityRule } from "./rules/query-complexity.rule";
 
 export interface GraphqlRequest {
   query: string;
@@ -40,11 +43,17 @@ function findSchemaPath(): string {
 @Injectable()
 export class GraphqlGatewayService {
   private readonly schema = buildSchema(readFileSync(findSchemaPath(), "utf8"));
+  private readonly maxDepth: number;
+  private readonly maxComplexity: number;
 
   constructor(
     private readonly reviewsService: AgentReviewsService,
     private readonly userService: UserService,
-  ) {}
+    @Optional() options?: { maxDepth?: number; maxComplexity?: number },
+  ) {
+    this.maxDepth = options?.maxDepth ?? 6;
+    this.maxComplexity = options?.maxComplexity ?? 100;
+  }
 
   /** Execute one GraphQL operation with a fresh relationship loader cache. */
   async execute(request: GraphqlRequest): Promise<ExecutionResult> {
@@ -71,10 +80,14 @@ export class GraphqlGatewayService {
       return { errors: [error] } as ExecutionResult;
     }
 
-    const validationRules =
-      process.env.NODE_ENV === "production"
-        ? [...specifiedRules, NoSchemaIntrospectionCustomRule]
-        : specifiedRules;
+    const validationRules = [
+      ...specifiedRules,
+      ...(process.env.NODE_ENV === "production"
+        ? [NoSchemaIntrospectionCustomRule]
+        : []),
+      createDepthLimitRule(this.maxDepth),
+      createQueryComplexityRule(this.maxComplexity),
+    ];
     const validationErrors = validate(this.schema, document, validationRules);
     if (validationErrors.length > 0) return { errors: validationErrors };
 

@@ -1,5 +1,9 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsEmail, IsNotEmpty } from "class-validator";
+import { IsNotEmpty } from "class-validator";
+import {
+  IsRfcEmail,
+  NormalizeEmail,
+} from "../../../common/decorators/is-rfc-email.decorator";
 
 export class LinkEmailDto {
   @ApiProperty({
@@ -7,7 +11,8 @@ export class LinkEmailDto {
     required: true,
     example: "newuser@example.com",
   })
-  @IsEmail()
+  @NormalizeEmail()
+  @IsRfcEmail()
   @IsNotEmpty()
   email: string;
 }

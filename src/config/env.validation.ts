@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsBoolean,
   IsUrl,
+  Matches,
   Min,
   Max,
 } from "class-validator";
@@ -34,6 +35,11 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   DATABASE_URL: string;
+
+  /** Explicit database identifier override used during the legacy-name compatibility window. */
+  @IsOptional()
+  @IsString()
+  DB_DATABASE?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -67,9 +73,47 @@ export class EnvironmentVariables {
   @IsString()
   LLAMA_API_BASE_URL?: string;
 
+  /**
+   * Explicit CORS allow-list (issue #83). Comma-separated origins, each a full
+   * `scheme://host[:port]` with an optional `*.` subdomain wildcard. The
+   * wildcard `*` on its own is rejected at startup in production by
+   * `resolveAllowedOrigins()`; this pattern at least rejects malformed entries
+   * such as a bare hostname or a value carrying a path.
+   */
+  @IsOptional()
+  @Matches(
+    /^$|^([a-z]+:\/\/)(\*\.)?[a-z0-9.-]+(:\d{1,5})?(,([a-z]+:\/\/)(\*\.)?[a-z0-9.-]+(:\d{1,5})?)*$/i,
+    {
+      message: "CORS_ALLOWED_ORIGINS must be a comma-separated list of origins",
+    },
+  )
+  CORS_ALLOWED_ORIGINS?: string;
+
+  /** Legacy single-list variable, superseded by CORS_ALLOWED_ORIGINS. */
   @IsString()
   @IsNotEmpty()
+  @Matches(
+    /^([a-z]+:\/\/)(\*\.)?[a-z0-9.-]+(:\d{1,5})?(,([a-z]+:\/\/)(\*\.)?[a-z0-9.-]+(:\d{1,5})?)*$/i,
+    { message: "CORS_ORIGIN must be a comma-separated list of origins" },
+  )
   CORS_ORIGIN: string = "http://localhost:3001";
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === true || value === "true")
+  ENABLE_PROFILING?: boolean = false;
+
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseInt(value, 10) || 5)
+  @Min(1)
+  MAX_WS_CONNECTIONS_PER_USER?: number = 5;
+
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseFloat(value) || 100)
+  @Min(0)
+  MAX_GAS_FEE_GWEI?: number = 100;
 
   @IsString()
   LOG_LEVEL: string = "info";
@@ -155,7 +199,7 @@ export class EnvironmentVariables {
   SENTRY_TRACES_SAMPLE_RATE?: number = 0.1;
 
   @IsOptional()
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
 
   // Observability toggles
@@ -306,6 +350,29 @@ export class EnvironmentVariables {
   @IsString()
   REDIS_URL?: string;
 
+  /**
+   * Comma-separated Redis URLs of independent masters used for Redlock
+   * distributed locks (use an odd count, e.g. 3). Falls back to REDIS_URL.
+   */
+  @IsOptional()
+  @IsString()
+  REDLOCK_NODES?: string;
+
+  /** Key prefix for distributed locks. Default: "trellis:lock:". */
+  @IsOptional()
+  @IsString()
+  REDLOCK_KEY_PREFIX?: string;
+
+  /** Extra disposable email domains to reject (comma-separated). */
+  @IsOptional()
+  @IsString()
+  DISPOSABLE_EMAIL_DOMAINS?: string;
+
+  /** Domains to exempt from the built-in disposable list (comma-separated). */
+  @IsOptional()
+  @IsString()
+  DISPOSABLE_EMAIL_ALLOWLIST?: string;
+
   /** Cache version prefix (e.g. "v1", "v2"). Default: "v1". */
   @IsOptional()
   @IsString()
@@ -323,6 +390,38 @@ export class EnvironmentVariables {
   @Min(100)
   @Transform(({ value }) => (value ? parseInt(value, 10) : 5000))
   HEALTH_CHECK_TIMEOUT_MS?: number;
+
+  // External dependency health checks (see src/dependency-health)
+  /** Set to "false" to turn the dependency health endpoints off entirely. */
+  @IsOptional()
+  @IsString()
+  DEPENDENCY_HEALTH_ENABLED?: string = "true";
+
+  /** Maximum time a single dependency probe may take. Minimum: 100 ms. */
+  @IsOptional()
+  @IsNumber()
+  @Min(100)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : 3000))
+  DEPENDENCY_HEALTH_TIMEOUT_MS?: number;
+
+  /** Latency above which a reachable dependency is reported as degraded. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : 1500))
+  DEPENDENCY_HEALTH_DEGRADED_LATENCY_MS?: number;
+
+  /** How long a dependency report is reused before probing again. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : 15000))
+  DEPENDENCY_HEALTH_CACHE_TTL_MS?: number;
+
+  /** Set to "false" to forbid outbound third-party probes even for maintainers. */
+  @IsOptional()
+  @IsString()
+  DEPENDENCY_HEALTH_NETWORK_PROBES?: string = "true";
 
   // Additional OpenAI Configuration
   @IsOptional()
@@ -551,10 +650,70 @@ export class EnvironmentVariables {
   @IsString()
   PAYMENTS_DEFAULT_PROCESSOR?: string;
 
+  /** Stripe signing secret (`whsec_...`) for /payments/webhooks/stripe. */
+  @IsOptional()
+  @IsString()
+  STRIPE_WEBHOOK_SECRET?: string;
+
+  /** Coinbase Commerce shared secret for /payments/webhooks/coinbase. */
+  @IsOptional()
+  @IsString()
+  COINBASE_WEBHOOK_SECRET?: string;
+
+  /** Shared secret for the generic HMAC scheme (/payments/webhooks/generic). */
+  @IsOptional()
+  @IsString()
+  PAYMENTS_WEBHOOK_SECRET?: string;
+
+  /** Accepted clock skew, in seconds, for signed webhook timestamps. */
+  @IsOptional()
+  @IsNumber()
+  @Transform(({ value }) => parseInt(value, 10) || 300)
+  PAYMENTS_WEBHOOK_TOLERANCE_SECONDS?: number = 300;
+
   /** Stellar Horizon endpoint. Default: https://horizon-testnet.stellar.org */
   @IsOptional()
   @IsString()
   STELLAR_HORIZON_URL?: string;
+
+  /**
+   * Comma-separated fallback Horizon endpoints (issue #160), tried in order
+   * when the primary fails or exceeds the timeout. Example:
+   * "https://horizon-fallback.stellar.example,https://horizon.example.org".
+   */
+  @IsOptional()
+  @IsString()
+  STELLAR_HORIZON_FALLBACK_URLS?: string;
+
+  /** Per-attempt Horizon request timeout in ms. Default: 5000 (issue #160). */
+  @IsOptional()
+  @IsNumber()
+  @Min(100)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : 5000))
+  STELLAR_HORIZON_TIMEOUT_MS?: number = 5000;
+
+  /** Max attempts (retries + failover) per Horizon request. Default: 2. */
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : 2))
+  STELLAR_HORIZON_MAX_RETRIES?: number = 2;
+
+  /** Base delay in ms for exponential backoff between attempts. Default: 100. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Transform(({ value }) =>
+    value !== undefined && value !== "" ? parseInt(value, 10) : 100,
+  )
+  STELLAR_HORIZON_BACKOFF_BASE_MS?: number = 100;
+
+  /** How long a failed Horizon node is skipped before being retried, in ms. Default: 60000. */
+  @IsOptional()
+  @IsNumber()
+  @Min(1000)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : 60000))
+  STELLAR_HORIZON_HEALTH_TTL_MS?: number = 60000;
 
   /** Stellar network passphrase. Default: testnet passphrase. */
   @IsOptional()
@@ -632,4 +791,50 @@ export class EnvironmentVariables {
   @IsBoolean()
   @Transform(({ value }) => value !== "false")
   RATE_LIMIT_FALLBACK_TO_MEMORY?: boolean = true;
+
+  // ── Integration Sandbox Mode ───────────────────────────────────────
+  // Opt-in deterministic fakes for the external payment/chain dependency so
+  // contributors can run the primary payment workflow with no credentials.
+  // Refused when NODE_ENV=production (see src/sandbox/sandbox.config.ts).
+
+  /** Master switch for sandbox mode. Must be exactly "true". Default: false. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === "true" || value === true)
+  SANDBOX_MODE?: boolean = false;
+
+  /** Default sandbox scenario: success | payment_failed | insufficient_funds | horizon_timeout. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_SCENARIO?: string = "success";
+
+  /** Seed for deterministic sandbox ids/hashes. Changing it changes every id. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_SEED?: string = "trellis-local-sandbox";
+
+  // ── Trading policy ─────────────────────────────────────────────────
+
+  /** Master switch for the trade execution endpoint. Default: true. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value !== "false")
+  TRADING_ENABLED?: boolean = true;
+
+  /** Maximum amount accepted by a single trade request. Default: 100000. */
+  @IsOptional()
+  @IsNumber()
+  @Min(Number.EPSILON)
+  @Transform(({ value }) => parseFloat(value) || 100000)
+  TRADING_MAX_ORDER_AMOUNT?: number = 100000;
+
+  /** Optional comma-separated asset allow-list, e.g. "XLM,USDC". */
+  @IsOptional()
+  @IsString()
+  TRADING_ALLOWED_ASSETS?: string;
+
+  /** Comma-separated trade sides. Defaults to "buy,sell". */
+  @IsOptional()
+  @IsString()
+  TRADING_ALLOWED_SIDES?: string;
 }

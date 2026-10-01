@@ -1,6 +1,7 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { v4 as uuidv4 } from "uuid";
 import { ConnectionInfo } from "../interfaces/websocket.interfaces";
+import { ConfigService } from "@nestjs/config";
 
 @Injectable()
 export class ConnectionManagerService {
@@ -15,13 +16,22 @@ export class ConnectionManagerService {
   // Map of clientId -> disconnectedAt timestamp
   private disconnectedClients: Map<string, Date> = new Map();
 
+  constructor(@Optional() private readonly configService?: ConfigService) {}
+
   /**
    * Register a new WebSocket connection
    */
   async registerConnection(
     clientId: string,
     info: ConnectionInfo,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const max = this.configService?.get<number>("MAX_WS_CONNECTIONS_PER_USER") ??
+      Number(process.env.MAX_WS_CONNECTIONS_PER_USER ?? 5);
+    const active = this.getUserConnections(info.userId).filter((c) => c.isAlive);
+    if (active.length >= max) {
+      this.logger.warn(`Connection limit reached for user ${info.userId}`);
+      return false;
+    }
     this.connections.set(clientId, {
       ...info,
       isAlive: true,
@@ -37,6 +47,7 @@ export class ConnectionManagerService {
     this.logger.debug(
       `Registered connection: ${clientId} for user ${info.userId}`,
     );
+    return true;
   }
 
   /**

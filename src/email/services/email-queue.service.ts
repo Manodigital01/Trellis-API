@@ -15,6 +15,7 @@ import {
 import { SmtpEmailProvider } from "../providers/smtp-email.provider";
 import { SendgridEmailProvider } from "../providers/sendgrid-email.provider";
 import { SesEmailProvider } from "../providers/ses-email.provider";
+import { withTraceContext } from "src/observability/async-job-tracing";
 
 export interface EmailJobData {
   emailLogId: string;
@@ -41,9 +42,11 @@ export class EmailQueueService {
   }
 
   async enqueueEmail(emailLogId: string): Promise<Job<EmailJobData>> {
+    // Stamp the active W3C trace context onto the job so the worker-side
+    // processing span is parented to the originating HTTP request span.
     const job = await this.emailQueue.add(
       "send-email",
-      { emailLogId },
+      withTraceContext({ emailLogId }),
       {
         attempts: 5,
         backoff: { type: "exponential", delay: 2000 },

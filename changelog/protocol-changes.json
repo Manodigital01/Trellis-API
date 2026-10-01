@@ -1,0 +1,140 @@
+{
+  "$schema": "./schema/protocol-changes.schema.json",
+  "schemaVersion": "1.0.0",
+  "project": "trellis-api",
+  "entries": [
+    {
+      "version": "0.2.0",
+      "date": "2026-09-27",
+      "status": "unreleased",
+      "impact": "compatible",
+      "title": "Progressive transaction detail disclosure with pre-submission preview",
+      "summary": "GET /reconcile/stellar/tx/{txid} and POST /reconcile/stellar/transactions accept details=summary|standard|advanced and dryRun=true. Responses add a disclosure block with per-section collapsed/expanded state; omitting details keeps the previous response shape byte for byte.",
+      "protocolSurfaces": [
+        {
+          "kind": "http",
+          "method": "GET",
+          "path": "/reconcile/stellar/tx/{txid}",
+          "description": "Optional ?details=summary|standard|advanced query parameter returning the tiered disclosure block."
+        },
+        {
+          "kind": "http",
+          "method": "POST",
+          "path": "/reconcile/stellar/transactions",
+          "description": "Optional ?details= and ?dryRun= query parameters; dryRun projects the transaction without writing it."
+        },
+        {
+          "kind": "http",
+          "method": "GET",
+          "path": "/reconcile/stellar/transactions",
+          "description": "Optional ?details= and ?dryRun= query parameters on the existing list endpoint."
+        }
+      ],
+      "migration": {
+        "required": false,
+        "automated": true,
+        "steps": [],
+        "notes": "No migration. Callers that do not send ?details= receive the unchanged legacy payload, so the change is additive."
+      },
+      "relatedIssues": [125],
+      "docs": ["docs/transaction-details.md"]
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-09-27",
+      "status": "unreleased",
+      "impact": "compatible",
+      "title": "Dependency health endpoints and operator diagnostics command",
+      "summary": "Adds GET /health/dependencies for a credential-free local summary, GET /health/dependencies/diagnostics for authenticated maintainers, and the npm run deps:health command that prints the same report to a terminal.",
+      "protocolSurfaces": [
+        {
+          "kind": "http",
+          "method": "GET",
+          "path": "/health/dependencies",
+          "description": "Public local-only summary of dependency states; returns 503 when a critical dependency is unavailable."
+        },
+        {
+          "kind": "http",
+          "method": "GET",
+          "path": "/health/dependencies/diagnostics",
+          "description": "Admin-only report including sanitized network probe results and remediation hints."
+        },
+        {
+          "kind": "cli",
+          "path": "npm run deps:health",
+          "description": "Maintainer-readable dependency report with --json, --no-network and --only flags."
+        }
+      ],
+      "migration": {
+        "required": false,
+        "automated": true,
+        "steps": [],
+        "notes": "No migration. New environment variables are optional and default to the previous behaviour."
+      },
+      "relatedIssues": [124],
+      "docs": ["docs/dependency-health.md"]
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-09-27",
+      "status": "unreleased",
+      "impact": "compatible",
+      "title": "Machine-readable protocol changelog",
+      "summary": "Adds GET /changelog/protocol backed by changelog/protocol-changes.json, validated against changelog/schema/protocol-changes.schema.json in CI and by npm run changelog:validate.",
+      "protocolSurfaces": [
+        {
+          "kind": "http",
+          "method": "GET",
+          "path": "/changelog/protocol",
+          "description": "Protocol-facing changes with impact, migration and version filters."
+        },
+        {
+          "kind": "cli",
+          "path": "npm run changelog:validate",
+          "description": "Validates the changelog against the schema and the semantic rules; exits non-zero on any violation."
+        },
+        {
+          "kind": "config",
+          "key": "CHANGELOG_PATH",
+          "description": "Optional override for the changelog file location, used by the validator and the API."
+        }
+      ],
+      "migration": {
+        "required": false,
+        "automated": true,
+        "steps": [],
+        "notes": "No migration. Consumers that need upgrade warnings can poll the endpoint from the version they run."
+      },
+      "relatedIssues": [126],
+      "docs": ["docs/protocol-changelog.md"]
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-09-27",
+      "status": "unreleased",
+      "impact": "compatible",
+      "title": "Fault injection suite for network, wallet and persistence failures",
+      "summary": "Adds a deterministic fault injection harness and npm run test:faults, covering timeouts, malformed provider responses, partial writes and retry behaviour including the absence of duplicate irreversible side effects.",
+      "protocolSurfaces": [
+        {
+          "kind": "cli",
+          "path": "npm run test:faults",
+          "description": "Runs the fault injection specs with no outbound network access."
+        },
+        {
+          "kind": "database",
+          "path": "stellar_transactions / reconciliation_invoices",
+          "description": "Exercises partial-write and constraint-violation paths that leave no duplicate rows behind."
+        }
+      ],
+      "migration": {
+        "required": false,
+        "automated": true,
+        "steps": [],
+        "notes": "No migration. Test-only harness; nothing is added to the production bundle."
+      },
+      "relatedIssues": [127],
+      "docs": ["docs/fault-injection.md"]
+    }
+  ]
+}

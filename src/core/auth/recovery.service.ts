@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { EmailLinkingService } from "./email-linking.service";
 import { EmailService } from "./email.service";
 import { ChallengeService } from "./challenge.service";
+import { normalizeEmail } from "../../common/decorators/is-rfc-email.decorator";
 
 @Injectable()
 export class RecoveryService {
@@ -19,7 +20,7 @@ export class RecoveryService {
     message: string;
     previewUrl?: string;
   }> {
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
     // Find user by email
     const user = await this.emailLinkingService.getUserByEmail(normalizedEmail);
@@ -50,7 +51,7 @@ export class RecoveryService {
     message: string;
     walletAddress: string;
   }> {
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
     // Find user by email
     const user = await this.emailLinkingService.getUserByEmail(normalizedEmail);

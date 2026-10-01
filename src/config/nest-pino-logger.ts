@@ -1,6 +1,6 @@
 // src/config/nest-pino-logger.ts
 import { Injectable, LoggerService } from "@nestjs/common";
-import { logger } from "./logger";
+import { logger, sanitizeLogValue } from "./logger";
 
 @Injectable()
 export class PinoLogger implements LoggerService {
@@ -32,15 +32,18 @@ export class PinoLogger implements LoggerService {
 
   private callLog(level: string, message: any, optionalParams: any[]) {
     const context = optionalParams[0] || this.context;
-    const logMessage = typeof message === "object" ? message : { message };
+    const logMessage =
+      typeof message === "object" ? sanitizeLogValue(message) : { message };
 
     if (context) {
-      logMessage.context = context;
+      (logMessage as Record<string, unknown>).context = context;
     }
 
     // Handle additional parameters
     if (optionalParams.length > 1) {
-      logMessage.params = optionalParams.slice(1);
+      (logMessage as Record<string, unknown>).params = sanitizeLogValue(
+        optionalParams.slice(1),
+      );
     }
 
     logger[level](logMessage);

@@ -25,6 +25,11 @@ export class BillingController {
     return this.billingService.setPlan(accountId, body.planId);
   }
 
+  @Get("accounts/:accountId/proration")
+  getProrationHistory(@Param("accountId") accountId: string) {
+    return this.billingService.getProrationHistory(accountId);
+  }
+
   @Post("accounts/:accountId/usage")
   recordUsage(
     @Param("accountId") accountId: string,

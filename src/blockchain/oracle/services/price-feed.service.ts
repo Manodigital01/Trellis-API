@@ -106,10 +106,56 @@ const CHAIN_CONTRACTS: Record<
 /** 30-minute TWAP window */
 const TWAP_SECONDS = 1800;
 
+/**
+ * Freshness window for an oracle feed. A feed that has not published within
+ * this window is treated as stale and excluded from the median: a price that
+ * stopped moving is worse than no price, because it still looks like one.
+ */
+export const DEFAULT_MAX_FEED_AGE_SECONDS = 60;
+
+/** A feed more than this far from the median is treated as an outlier. */
+export const OUTLIER_DEVIATION_PERCENT = DEVIATION_THRESHOLD_PERCENT;
+
+/** A single oracle reading plus the moment it was published. */
+export interface OracleQuote {
+  price: number;
+  /** Epoch ms the feed last updated; null when the source reports no timestamp. */
+  updatedAt: number | null;
+}
+
+/** Why a feed was left out of the median. */
+export type OracleRejectionReason = "unavailable" | "stale" | "outlier";
+
+/** Per-feed outcome of the medianizer. */
+export interface OracleQuoteResult {
+  source: PriceSource;
+  price: number | null;
+  updatedAt: Date | null;
+  ageSeconds: number | null;
+  accepted: boolean;
+  deviationPercent: number | null;
+  reason?: OracleRejectionReason;
+}
+
+/** How much to trust a median, based on how many feeds survived. */
+export type OracleConfidence = "high" | "medium" | "low" | "none";
+
+/** Result of aggregating every configured oracle for one asset/chain. */
+export interface OracleAggregation {
+  price: number;
+  acceptedSources: PriceSource[];
+  quotes: OracleQuoteResult[];
+  stale: boolean;
+  usedFallbackPrice: boolean;
+  maxDeviationPercent: number;
+  confidence: OracleConfidence;
+}
+
 @Injectable()
 export class PriceFeedService {
   private readonly logger = new Logger(PriceFeedService.name);
   private readonly providers = new Map<SupportedChain, JsonRpcProvider>();
+  private readonly maxFeedAgeSeconds: number;
 
   constructor(
     @InjectRepository(PriceRecord)
@@ -118,6 +164,9 @@ export class PriceFeedService {
     private readonly eventEmitter: EventEmitter2,
   ) {
     this.initProviders();
+    this.maxFeedAgeSeconds = resolveMaxFeedAgeSeconds(
+      this.configService.get<string>("PRICE_FEED_MAX_STALENESS_SECONDS"),
+    );
   }
 
   private initProviders(): void {
@@ -137,40 +186,242 @@ export class PriceFeedService {
     asset: string,
     chain: SupportedChain,
   ): Promise<PriceResponseDto> {
-    const prices = await this.fetchAllSources(asset, chain);
+    const quotes = await this.fetchAllSources(asset, chain);
+    const aggregation = this.aggregateOracleQuotes(quotes);
 
-    if (Object.keys(prices).length === 0) {
-      throw new Error(
-        `No price sources available for ${asset} on ${chain}. Configure RPC URLs.`,
-      );
+    let sourcePrices: Partial<Record<PriceSource, number>> = {};
+    for (const quote of aggregation.quotes) {
+      if (quote.accepted && quote.price !== null) {
+        sourcePrices[quote.source] = quote.price;
+      }
     }
 
-    const { median, maxDeviationPercent } = this.aggregatePrices(prices);
-    const deviationAlert = maxDeviationPercent > DEVIATION_THRESHOLD_PERCENT;
+    let usedFallbackPrice = false;
+    let price = aggregation.price;
+
+    // Every feed was stale (or none exists): reuse the last price we know was
+    // valid rather than pricing a position off a dead feed.
+    if (aggregation.acceptedSources.length === 0) {
+      const lastKnown = await this.findLastKnownPrice(asset, chain);
+
+      if (!lastKnown) {
+        throw new Error(
+          `No price sources available for ${asset} on ${chain} and no last known price to fall back to. Configure RPC URLs.`,
+        );
+      }
+
+      price = Number(lastKnown.price);
+      usedFallbackPrice = true;
+      sourcePrices = { ...(lastKnown.sourcePrices ?? {}) };
+      // Recorded on the aggregation so the alert reports the fallback it just
+      // made rather than the fresh price it did not have.
+      aggregation.usedFallbackPrice = true;
+      this.emitStaleFallbackAlert(asset, chain, aggregation, price);
+    } else if (aggregation.stale) {
+      this.emitStaleFallbackAlert(asset, chain, aggregation, price);
+    }
+
+    const outliers = aggregation.quotes
+      .filter((q) => q.reason === "outlier")
+      .map((q) => q.source);
+    const staleSources = aggregation.quotes
+      .filter((q) => q.reason === "stale")
+      .map((q) => q.source);
+
+    const deviationAlert =
+      outliers.length > 0 || aggregation.maxDeviationPercent > DEVIATION_THRESHOLD_PERCENT;
 
     if (deviationAlert) {
       this.eventEmitter.emit("price.deviation", {
         asset,
         chain,
-        prices,
-        maxDeviationPercent,
+        prices: sourcePrices,
+        maxDeviationPercent: aggregation.maxDeviationPercent,
+        outliers,
       });
       this.logger.warn(
-        `Price deviation alert: ${asset}/${chain} — max deviation ${maxDeviationPercent.toFixed(2)}%`,
+        `Price deviation alert: ${asset}/${chain} — max deviation ${aggregation.maxDeviationPercent.toFixed(2)}%`,
       );
     }
 
     const record = this.priceRecordRepository.create({
       asset: asset.toUpperCase(),
       chain,
-      price: median,
-      sourcePrices: prices as Record<PriceSource, number>,
+      price,
+      sourcePrices: sourcePrices as Record<PriceSource, number>,
       deviationAlert,
-      maxDeviationPercent,
+      maxDeviationPercent: aggregation.maxDeviationPercent,
     });
 
     const saved = await this.priceRecordRepository.save(record);
-    return this.toResponseDto(saved);
+
+    return {
+      ...this.toResponseDto(saved),
+      stale: aggregation.stale,
+      usedFallbackPrice,
+      staleSources,
+      outliers,
+      acceptedSources: aggregation.acceptedSources,
+    };
+  }
+
+  /**
+   * Aggregate every configured oracle for an asset/chain without persisting.
+   * Exposes which feeds were used, which were stale and which were dropped as
+   * outliers, so a caller can see how much to trust the median.
+   */
+  async getOracleAggregation(
+    asset: string,
+    chain: SupportedChain,
+    maxAgeSeconds?: number,
+  ): Promise<OracleAggregation & { maxAgeSeconds: number }> {
+    const quotes = await this.fetchAllSources(asset, chain);
+    const aggregation = this.aggregateOracleQuotes(quotes, maxAgeSeconds);
+
+    if (aggregation.acceptedSources.length === 0) {
+      const lastKnown = await this.findLastKnownPrice(asset, chain);
+      if (lastKnown) {
+        aggregation.price = Number(lastKnown.price);
+        aggregation.usedFallbackPrice = true;
+        aggregation.confidence = "none";
+        this.emitStaleFallbackAlert(
+          asset,
+          chain,
+          aggregation,
+          aggregation.price,
+        );
+      }
+    }
+
+    return {
+      ...aggregation,
+      maxAgeSeconds: maxAgeSeconds ?? this.maxFeedAgeSeconds,
+    };
+  }
+
+  /**
+   * Medianizer: drop feeds that are stale or unusable, then drop statistical
+   * outliers, then take the median of what is left.
+   *
+   * Outliers are measured against the median rather than against each other
+   * so that one manipulated feed cannot drag the reference value with it. The
+   * median is only ever taken over a set of independent feeds, which is the
+   * whole point — a single oracle is a single point of failure.
+   */
+  aggregateOracleQuotes(
+    quotes: Partial<Record<PriceSource, OracleQuote>>,
+    maxAgeSeconds: number = this.maxFeedAgeSeconds,
+    now: number = Date.now(),
+  ): OracleAggregation {
+    const results: OracleQuoteResult[] = [];
+    const fresh: {
+      source: PriceSource;
+      price: number;
+      updatedAt: number | null;
+      ageSeconds: number | null;
+    }[] = [];
+    let sawStale = false;
+
+    for (const source of Object.values(PriceSource)) {
+      const quote = quotes[source];
+
+      if (!quote || !isUsablePrice(quote.price)) {
+        results.push({
+          source,
+          price: null,
+          updatedAt: null,
+          ageSeconds: null,
+          accepted: false,
+          deviationPercent: null,
+          reason: "unavailable",
+        });
+        continue;
+      }
+
+      const updatedAt = quote.updatedAt ?? null;
+      const ageSeconds = updatedAt === null ? null : Math.max(0, (now - updatedAt) / 1000);
+
+      if (ageSeconds !== null && ageSeconds > maxAgeSeconds) {
+        sawStale = true;
+        results.push({
+          source,
+          price: quote.price,
+          updatedAt: new Date(updatedAt),
+          ageSeconds,
+          accepted: false,
+          deviationPercent: null,
+          reason: "stale",
+        });
+        continue;
+      }
+
+      fresh.push({
+        source,
+        price: quote.price,
+        updatedAt,
+        ageSeconds,
+      });
+    }
+
+    if (fresh.length === 0) {
+      return {
+        price: 0,
+        acceptedSources: [],
+        quotes: results,
+        stale: sawStale,
+        usedFallbackPrice: false,
+        maxDeviationPercent: 0,
+        confidence: "none",
+      };
+    }
+
+    const median = medianOf(fresh.map((f) => f.price));
+    const accepted: typeof fresh = [];
+
+    for (const candidate of fresh) {
+      const deviationPercent =
+        median > 0 ? (Math.abs(candidate.price - median) / median) * 100 : 0;
+
+      if (deviationPercent > OUTLIER_DEVIATION_PERCENT) {
+        results.push({
+          source: candidate.source,
+          price: candidate.price,
+          updatedAt:
+            candidate.updatedAt === null ? null : new Date(candidate.updatedAt),
+          ageSeconds: candidate.ageSeconds,
+          accepted: false,
+          deviationPercent,
+          reason: "outlier",
+        });
+        continue;
+      }
+
+      accepted.push(candidate);
+      results.push({
+        source: candidate.source,
+        price: candidate.price,
+        updatedAt:
+          candidate.updatedAt === null ? null : new Date(candidate.updatedAt),
+        ageSeconds: candidate.ageSeconds,
+        accepted: true,
+        deviationPercent,
+      });
+    }
+
+    // A lone outlier cannot be discarded: rejecting every feed would leave the
+    // medianizer with nothing to return but a guess, so the full set stands.
+    const contributors = accepted.length > 0 ? accepted : fresh;
+    const keptPrices = contributors.map((c) => c.price);
+
+    return {
+      price: medianOf(keptPrices),
+      acceptedSources: contributors.map((c) => c.source),
+      quotes: sortBySource(results),
+      stale: sawStale,
+      usedFallbackPrice: false,
+      maxDeviationPercent: maxDeviationPercent(keptPrices),
+      confidence: confidenceFor(contributors.length),
+    };
   }
 
   /**
@@ -196,10 +447,10 @@ export class PriceFeedService {
   private async fetchAllSources(
     asset: string,
     chain: SupportedChain,
-  ): Promise<Partial<Record<PriceSource, number>>> {
+  ): Promise<Partial<Record<PriceSource, OracleQuote>>> {
     const provider = this.providers.get(chain);
     const cfg = CHAIN_CONTRACTS[chain];
-    const prices: Partial<Record<PriceSource, number>> = {};
+    const prices: Partial<Record<PriceSource, OracleQuote>> = {};
 
     if (!provider) {
       return prices;
@@ -217,8 +468,11 @@ export class PriceFeedService {
           feed.latestRoundData(),
           feed.decimals(),
         ]);
-        prices[PriceSource.CHAINLINK] =
-          Number(roundData.answer) / 10 ** Number(decimals);
+        prices[PriceSource.CHAINLINK] = {
+          price: Number(roundData.answer) / 10 ** Number(decimals),
+          // 0 means "round never completed", which is not the same as fresh.
+          updatedAt: toEpochMs(roundData.updatedAt),
+        };
       })(),
 
       // Band Protocol
@@ -227,7 +481,14 @@ export class PriceFeedService {
         const ref = new Contract(cfg.band, BAND_ABI, provider);
         const data = await ref.getReferenceData(ticker, "USD");
         // Band returns rate with 18 decimals
-        prices[PriceSource.BAND] = Number(data.rate) / 1e18;
+        prices[PriceSource.BAND] = {
+          price: Number(data.rate) / 1e18,
+          updatedAt: toEpochMs(
+            data.lastUpdatedBase > data.lastUpdatedQuote
+              ? data.lastUpdatedBase
+              : data.lastUpdatedQuote,
+          ),
+        };
       })(),
 
       // Uniswap V3 TWAP
@@ -249,12 +510,55 @@ export class PriceFeedService {
         const rawPrice = Math.pow(1.0001, avgTick);
         // USDC has 6 decimals, WETH has 18 — adjust
         const adjustedPrice = (1 / rawPrice) * 1e12;
-        prices[PriceSource.UNISWAP_TWAP] = adjustedPrice;
+        prices[PriceSource.UNISWAP_TWAP] = {
+          price: adjustedPrice,
+          // Computed from the chain at request time, so it cannot be stale.
+          updatedAt: Date.now(),
+        };
         void token0; // used for context, suppress lint
       })(),
     ]);
 
     return prices;
+  }
+
+  /** Most recent persisted price for an asset/chain, i.e. the last known good. */
+  private async findLastKnownPrice(
+    asset: string,
+    chain: SupportedChain,
+  ): Promise<PriceRecord | null> {
+    return this.priceRecordRepository.findOne({
+      where: { asset: asset.toUpperCase(), chain },
+      order: { createdAt: "DESC" },
+    });
+  }
+
+  private emitStaleFallbackAlert(
+    asset: string,
+    chain: SupportedChain,
+    aggregation: OracleAggregation,
+    price: number,
+  ): void {
+    this.eventEmitter.emit("price.stale", {
+      asset,
+      chain,
+      price,
+      confidence: aggregation.confidence,
+      staleSources: aggregation.quotes
+        .filter((q) => q.reason === "stale")
+        .map((q) => q.source),
+      usedFallbackPrice: aggregation.usedFallbackPrice,
+      maxDeviationPercent: aggregation.maxDeviationPercent,
+    });
+
+    this.logger.warn(
+      `Stale price feeds for ${asset}/${chain} — ` +
+        `${aggregation.quotes.filter((q) => q.reason === "stale").length} feed(s) past the ` +
+        `${this.maxFeedAgeSeconds}s freshness window` +
+        (aggregation.usedFallbackPrice
+          ? "; falling back to the last known valid price"
+          : ""),
+    );
   }
 
   /**
@@ -272,23 +576,10 @@ export class PriceFeedService {
       return { median: 0, maxDeviationPercent: 0 };
     }
 
-    const sorted = [...values].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    const median =
-      sorted.length % 2 === 0
-        ? (sorted[mid - 1] + sorted[mid]) / 2
-        : sorted[mid];
-
-    let maxDeviationPercent = 0;
-    for (let i = 0; i < values.length; i++) {
-      for (let j = i + 1; j < values.length; j++) {
-        const avg = (values[i] + values[j]) / 2;
-        const dev = avg > 0 ? (Math.abs(values[i] - values[j]) / avg) * 100 : 0;
-        if (dev > maxDeviationPercent) maxDeviationPercent = dev;
-      }
-    }
-
-    return { median, maxDeviationPercent };
+    return {
+      median: medianOf(values),
+      maxDeviationPercent: maxDeviationPercent(values),
+    };
   }
 
   private toResponseDto(record: PriceRecord): PriceResponseDto {
@@ -299,7 +590,76 @@ export class PriceFeedService {
       sourcePrices: record.sourcePrices,
       deviationAlert: record.deviationAlert,
       maxDeviationPercent: Number(record.maxDeviationPercent),
+      stale: false,
+      usedFallbackPrice: false,
+      staleSources: [],
+      outliers: [],
+      acceptedSources: Object.keys(record.sourcePrices ?? {}) as PriceSource[],
       timestamp: record.createdAt,
     };
   }
+}
+
+/** Median of a non-empty list of prices. */
+function medianOf(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+/** Largest pairwise deviation, as a percentage of the pair's midpoint. */
+function maxDeviationPercent(values: number[]): number {
+  let max = 0;
+
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      const avg = (values[i] + values[j]) / 2;
+      const dev = avg > 0 ? (Math.abs(values[i] - values[j]) / avg) * 100 : 0;
+      if (dev > max) max = dev;
+    }
+  }
+
+  return max;
+}
+
+function isUsablePrice(price: unknown): price is number {
+  return typeof price === "number" && isFinite(price) && price > 0;
+}
+
+/** Chain timestamps are in seconds; 0 means "never", which is not fresh. */
+function toEpochMs(seconds: unknown): number | null {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return null;
+
+  return value * 1000;
+}
+
+function confidenceFor(feedCount: number): OracleConfidence {
+  if (feedCount >= 3) return "high";
+  if (feedCount === 2) return "medium";
+  if (feedCount === 1) return "low";
+  return "none";
+}
+
+function sortBySource(quotes: OracleQuoteResult[]): OracleQuoteResult[] {
+  const order = Object.values(PriceSource);
+  return [...quotes].sort(
+    (a, b) => order.indexOf(a.source) - order.indexOf(b.source),
+  );
+}
+
+function resolveMaxFeedAgeSeconds(configured?: string): number {
+  const parsed = Number.parseInt(
+    configured ?? process.env.PRICE_FEED_MAX_STALENESS_SECONDS ?? "",
+    10,
+  );
+
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+
+  return DEFAULT_MAX_FEED_AGE_SECONDS;
 }

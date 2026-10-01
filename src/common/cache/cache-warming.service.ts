@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from "@nestjs/common";
 import { logger } from "../../config/logger";
-import type { CacheService } from "./cache.service";
+import { CacheService } from "./cache.service";
 
 /**
  * A warmer function that pre-loads data into the cache.

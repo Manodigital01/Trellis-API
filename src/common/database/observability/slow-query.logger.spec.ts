@@ -14,6 +14,13 @@ describe("SlowQueryLogger", () => {
     logger = module.get(SlowQueryLogger);
   });
 
+  it("uses the 500ms default threshold required for production diagnostics", () => {
+    logger.logSlowQuery(499, "SELECT 1");
+    logger.logSlowQuery(500, "SELECT 2");
+    expect(logger.getSlowQueries()).toHaveLength(1);
+    expect(logger.getSlowQueries()[0].executionTime).toBe(500);
+  });
+
   describe("logSlowQuery", () => {
     it("stores slow queries", () => {
       logger.logSlowQuery(1500, "SELECT * FROM users WHERE id = ?");

@@ -5,6 +5,7 @@ import {
   Delete,
   Param,
   Body,
+  Request,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -97,8 +98,13 @@ export class AdminRoleController {
   async assignRole(
     @Param("id") id: string,
     @Body() dto: AssignRoleDto,
+    @Request() request?: any,
   ): Promise<{ id: string; role: Role }> {
-    const user = await this.userService.assignRole(id, dto.role);
+    const user = await this.userService.assignRole(id, dto.role, {
+      actorId: request?.user?.sub ?? request?.user?.id ?? id,
+      actorRole: request?.user?.role ?? Role.ADMIN,
+      reason: dto.reason,
+    });
     return { id: user.id, role: user.role };
   }
 
@@ -111,8 +117,13 @@ export class AdminRoleController {
   @ApiResponse({ status: 404, description: "User not found" })
   async resetRole(
     @Param("id") id: string,
+    @Request() request?: any,
   ): Promise<{ id: string; role: Role }> {
-    const user = await this.userService.assignRole(id, Role.USER);
+    const user = await this.userService.assignRole(id, Role.USER, {
+      actorId: request?.user?.sub ?? request?.user?.id ?? id,
+      actorRole: request?.user?.role ?? Role.ADMIN,
+      reason: "Administrator reset the user to the least-privileged role",
+    });
     return { id: user.id, role: user.role };
   }
 }

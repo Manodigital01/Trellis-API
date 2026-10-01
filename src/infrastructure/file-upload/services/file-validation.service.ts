@@ -1,3 +1,4 @@
+import 'multer';
 import { Injectable, Logger, BadRequestException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { FileCategory } from "../entities/uploaded-file.entity";

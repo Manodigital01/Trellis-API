@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import {
   NotificationPreference,
   NotificationChannelPreference,
+  NotificationDeliveryMode,
 } from '../entities/notification-preference.entity';
 import {
   UpdateNotificationPreferenceDto,
@@ -61,6 +62,7 @@ export class NotificationPreferenceService {
     if (preference) {
       Object.assign(preference, {
         preference: dto.preference,
+        deliveryMode: dto.deliveryMode ?? NotificationDeliveryMode.IMMEDIATE,
         digestFrequency: dto.digestFrequency,
         quietHoursStart: dto.quietHoursStart,
         quietHoursEnd: dto.quietHoursEnd,
@@ -79,6 +81,7 @@ export class NotificationPreferenceService {
         category: dto.category,
         channel: dto.channel,
         preference: dto.preference,
+        deliveryMode: dto.deliveryMode ?? NotificationDeliveryMode.IMMEDIATE,
         digestFrequency: dto.digestFrequency,
         quietHoursStart: dto.quietHoursStart,
         quietHoursEnd: dto.quietHoursEnd,
@@ -205,6 +208,7 @@ export class NotificationPreferenceService {
               preference: isEssential
                 ? NotificationChannelPreference.ENABLED
                 : NotificationChannelPreference.DISABLED,
+              deliveryMode: NotificationDeliveryMode.IMMEDIATE,
             }),
           );
         }

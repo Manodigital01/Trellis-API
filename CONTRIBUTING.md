@@ -94,6 +94,27 @@ npm run test
 npm run lint
 ```
 
+### Sandbox Mode (no credentials required)
+
+If you are working on the payment or chain integration and do not want to
+configure PostgreSQL, Redis, Stellar or Grantfox, use **integration sandbox
+mode**. It swaps the external payment dependency for deterministic fakes that
+need no secrets and never touch a real network or ledger.
+
+```bash
+# Run the full create → sign → submit → status → refund workflow, offline
+npm run sandbox:demo
+
+# Sandbox test suite
+npm run test:sandbox
+```
+
+Set `SANDBOX_MODE=true` in `.env` to enable it for the running API and select
+the processor per request with `X-Payment-Processor: sandbox` (or
+`PAYMENTS_DEFAULT_PROCESSOR=sandbox`). It is refused when
+`NODE_ENV=production`. See [docs/SANDBOX_MODE.md](docs/SANDBOX_MODE.md) for the
+available scenarios, configuration and limitations.
+
 ### Environment Configuration
 
 The API validates all required secrets at startup. Invalid or placeholder values

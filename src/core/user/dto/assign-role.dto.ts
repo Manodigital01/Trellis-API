@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsEnum } from "class-validator";
+import { IsEnum, IsOptional, IsString, MaxLength } from "class-validator";
 import { Role } from "src/common/guard/roles.enum";
 
 /**
@@ -18,4 +18,9 @@ export class AssignRoleDto {
     message: `role must be one of: ${Object.values(Role).join(", ")}`,
   })
   role: Role;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reason?: string;
 }

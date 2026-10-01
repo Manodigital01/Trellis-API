@@ -7,7 +7,7 @@ describe("HorizonPollingService", () => {
     const flags = { isEnabled: jest.fn().mockReturnValue(false) };
     const service = new HorizonPollingService(reconciliation as any, flags as unknown as FeatureFlagsService);
 
-    expect(service.poll()).toEqual({
+    await expect(service.poll()).resolves.toEqual({
       skipped: true,
       reason: "feature_disabled",
       ingested: 0,

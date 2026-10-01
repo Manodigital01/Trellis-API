@@ -1,0 +1,29 @@
+{
+  "$schema": "./schema/protocol-changes.schema.json",
+  "schemaVersion": "1.0.0",
+  "project": "trellis-api",
+  "entries": [
+    {
+      "version": "0.2.0",
+      "date": "2026-09-27",
+      "status": "unreleased",
+      "impact": "breaking",
+      "title": "An entry that breaks callers",
+      "summary": "Declares a breaking change with no migration and no issue.",
+      "protocolSurfaces": [
+        {
+          "kind": "http",
+          "method": "POST",
+          "path": "/example/breaking",
+          "description": "A route whose response envelope changed."
+        }
+      ],
+      "migration": {
+        "required": false,
+        "automated": false,
+        "steps": [],
+        "notes": "Callers must adapt before upgrading."
+      }
+    }
+  ]
+}

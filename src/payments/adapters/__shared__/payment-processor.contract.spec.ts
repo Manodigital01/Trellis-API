@@ -10,6 +10,8 @@ import {
 } from "../../interfaces/payment-processor.interface";
 import { GrantfoxAdapter } from "../grantfox/grantfox.adapter";
 import { StellarAdapter } from "../stellar/stellar.adapter";
+import { SandboxPaymentAdapter } from "src/sandbox/adapters/sandbox-payment.adapter";
+import { SandboxConfigService } from "src/sandbox/sandbox.config";
 
 /**
  * Contract-compliance suite. Every adapter is driven through the full
@@ -132,7 +134,29 @@ function grantfoxCase(): AdapterCase {
   };
 }
 
-const cases = [stellarCase(), grantfoxCase()];
+function sandboxCase(): AdapterCase {
+  const build = (): IPaymentProcessor => {
+    const config = {
+      get: (key: string, def?: unknown) =>
+        key === "SANDBOX_MODE" ? "true" : def,
+    } as unknown as ConfigService;
+    return new SandboxPaymentAdapter(new SandboxConfigService(config));
+  };
+
+  return {
+    name: "SandboxPaymentAdapter",
+    build,
+    request: {
+      amount: "10",
+      currency: "XLM",
+      destination: "GBSANDBOXDESTINATION",
+      source: "GBSANDBOXSOURCE",
+      idempotencyKey: "idem-sandbox",
+    },
+  };
+}
+
+const cases = [stellarCase(), grantfoxCase(), sandboxCase()];
 
 describe.each(cases)("IPaymentProcessor contract: $name", (testCase) => {
   let adapter: IPaymentProcessor;

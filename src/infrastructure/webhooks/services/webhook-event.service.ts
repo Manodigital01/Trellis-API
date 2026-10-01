@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { ConflictException, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { InjectQueue } from "@nestjs/bull";
@@ -27,7 +27,10 @@ export class WebhookEventService {
    * Publish a new webhook event. Matches active subscribers, creates delivery
    * records, and enqueues each delivery for async processing.
    */
-  async publishEvent(dto: PublishWebhookEventDto): Promise<WebhookEvent> {
+  async publishEvent(
+    dto: PublishWebhookEventDto,
+    source?: { subscriptionId: string; externalEventId: string },
+  ): Promise<WebhookEvent> {
     // Persist the event
     const event = this.eventRepo.create({
       eventType: dto.eventType,
@@ -35,8 +38,30 @@ export class WebhookEventService {
       aggregateId: dto.aggregateId,
       metadata: dto.metadata,
       status: WebhookEventStatus.PENDING,
+      sourceSubscriptionId: source?.subscriptionId ?? null,
+      externalEventId: source?.externalEventId ?? null,
     });
-    const saved = await this.eventRepo.save(event);
+    let saved: WebhookEvent;
+    try {
+      saved = await this.eventRepo.save(event);
+    } catch (error) {
+      const databaseError = error as {
+        code?: string;
+        driverError?: { code?: string };
+      };
+      if (
+        source &&
+        (databaseError.code ?? databaseError.driverError?.code) === "23505"
+      ) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: "Conflict",
+          reason: "duplicate_event",
+          message: "This webhook event ID has already been processed.",
+        });
+      }
+      throw error;
+    }
     this.logger.log(`Event published: ${saved.id} type=${saved.eventType}`);
 
     // Find matching subscribers

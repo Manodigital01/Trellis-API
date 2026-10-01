@@ -5,6 +5,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
   Matches,
 } from "class-validator";
 import {
@@ -46,6 +47,7 @@ export class CreatePaymentDto implements PaymentRequest {
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(255)
   idempotencyKey: string;
 
   @IsOptional()

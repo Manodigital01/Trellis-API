@@ -53,6 +53,39 @@ export enum Permission {
   KYC_REVIEW = "kyc:review",
   GOVERNANCE_VOTE = "governance:vote",
   SERVICE_SYNC = "service:sync",
+
+  // Retry & Job Management
+  RETRY_VIEW = "retry:view",
+  RETRY_MANAGE = "retry:manage",
+
+  // Dead Letter Management
+  DEAD_LETTER_VIEW = "dead_letter:view",
+  DEAD_LETTER_RETRY = "dead_letter:retry",
+
+  // Pause Controls
+  PAUSE_VIEW = "pause:view",
+  PAUSE_ACTIVATE = "pause:activate",
+  PAUSE_RESUME = "pause:resume",
+
+  // Invariant Monitoring
+  INVARIANT_VIEW = "invariant:view",
+  INVARIANT_RUN = "invariant:run",
+
+  // Audit & Compliance
+  AUDIT_READ = "audit:read",
+  AUDIT_EXPORT = "audit:export",
+
+  // Webhook Management
+  WEBHOOK_READ = "webhook:read",
+  WEBHOOK_MANAGE = "webhook:manage",
+
+  // Import/Export
+  IMPORT_EXECUTE = "import:execute",
+  EXPORT_EXECUTE = "export:execute",
+
+  // Disaster Recovery
+  DR_VIEW = "dr:view",
+  DR_EXECUTE = "dr:execute",
 }
 
 /**
@@ -73,6 +106,22 @@ export interface UiCapabilities {
   canSubmitOracle: boolean;
   canMaintainSystem: boolean;
   canExecuteServiceSync: boolean;
+  canViewRetries: boolean;
+  canManageRetries: boolean;
+  canViewDeadLetters: boolean;
+  canRetryDeadLetters: boolean;
+  canViewPause: boolean;
+  canActivatePause: boolean;
+  canResumePause: boolean;
+  canViewInvariants: boolean;
+  canRunInvariants: boolean;
+  canReadAudit: boolean;
+  canExportAudit: boolean;
+  canManageWebhooks: boolean;
+  canImport: boolean;
+  canExport: boolean;
+  canViewDR: boolean;
+  canExecuteDR: boolean;
 }
 
 /**
@@ -162,6 +211,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ORACLE_VERIFY,
     Permission.MODULE_READ,
     Permission.METRICS_READ,
+    Permission.RETRY_VIEW,
+    Permission.DEAD_LETTER_VIEW,
+    Permission.AUDIT_READ,
   ],
   [Role.MAINTAINER]: [
     Permission.USER_READ,
@@ -184,6 +236,16 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.ALERTS_MANAGE,
     Permission.RATE_LIMIT_MANAGE,
     Permission.SYSTEM_MAINTENANCE,
+    Permission.RETRY_VIEW,
+    Permission.RETRY_MANAGE,
+    Permission.DEAD_LETTER_VIEW,
+    Permission.PAUSE_VIEW,
+    Permission.INVARIANT_VIEW,
+    Permission.INVARIANT_RUN,
+    Permission.AUDIT_READ,
+    Permission.WEBHOOK_READ,
+    Permission.EXPORT_EXECUTE,
+    Permission.DR_VIEW,
   ],
   [Role.ADMIN]: Object.values(Permission),
   [Role.SERVICE_ACTOR]: [
@@ -193,6 +255,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.PAYMENT_PROCESS,
     Permission.RECONCILIATION_RUN,
     Permission.METRICS_READ,
+    Permission.RETRY_VIEW,
+    Permission.RETRY_MANAGE,
+    Permission.DEAD_LETTER_VIEW,
   ],
   [Role.GOVERNANCE_OPERATOR]: [
     Permission.USER_READ,
@@ -285,5 +350,21 @@ export function getUiCapabilities(
     canSubmitOracle: hasPermission(roleOrRoles, Permission.ORACLE_SUBMIT),
     canMaintainSystem: hasPermission(roleOrRoles, Permission.SYSTEM_MAINTENANCE),
     canExecuteServiceSync: hasPermission(roleOrRoles, Permission.SERVICE_SYNC),
+    canViewRetries: hasPermission(roleOrRoles, Permission.RETRY_VIEW),
+    canManageRetries: hasPermission(roleOrRoles, Permission.RETRY_MANAGE),
+    canViewDeadLetters: hasPermission(roleOrRoles, Permission.DEAD_LETTER_VIEW),
+    canRetryDeadLetters: hasPermission(roleOrRoles, Permission.DEAD_LETTER_RETRY),
+    canViewPause: hasPermission(roleOrRoles, Permission.PAUSE_VIEW),
+    canActivatePause: hasPermission(roleOrRoles, Permission.PAUSE_ACTIVATE),
+    canResumePause: hasPermission(roleOrRoles, Permission.PAUSE_RESUME),
+    canViewInvariants: hasPermission(roleOrRoles, Permission.INVARIANT_VIEW),
+    canRunInvariants: hasPermission(roleOrRoles, Permission.INVARIANT_RUN),
+    canReadAudit: hasPermission(roleOrRoles, Permission.AUDIT_READ),
+    canExportAudit: hasPermission(roleOrRoles, Permission.AUDIT_EXPORT),
+    canManageWebhooks: hasPermission(roleOrRoles, Permission.WEBHOOK_MANAGE),
+    canImport: hasPermission(roleOrRoles, Permission.IMPORT_EXECUTE),
+    canExport: hasPermission(roleOrRoles, Permission.EXPORT_EXECUTE),
+    canViewDR: hasPermission(roleOrRoles, Permission.DR_VIEW),
+    canExecuteDR: hasPermission(roleOrRoles, Permission.DR_EXECUTE),
   };
 }

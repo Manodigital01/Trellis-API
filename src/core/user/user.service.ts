@@ -5,10 +5,21 @@ import {
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
-import { User } from "./entities/user.entity";
+import { User, UserStatus } from "./entities/user.entity";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { Role } from "src/common/guard/roles.enum";
+import { SensitiveActionAuditService } from "src/infrastructure/audit/sensitive-actions/sensitive-action-audit.service";
+import {
+  AuditActorType,
+  SensitiveActionStatus,
+} from "src/infrastructure/audit/entities/sensitive-action-event.entity";
+import { SensitiveAction } from "src/infrastructure/audit/sensitive-actions/sensitive-action.enum";
+import {
+  UserLifecycleState,
+  UserStateMachine,
+  deriveUserLifecycleState,
+} from "src/common/lifecycle/record-state-machines";
 
 /**
  * Pairs of roles that are mutually exclusive and must never be held together.
@@ -24,6 +35,7 @@ export class UserService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly sensitiveActionAudit: SensitiveActionAuditService,
   ) {}
 
   create(createUserDto: CreateUserDto) {
@@ -71,13 +83,49 @@ export class UserService {
    * {@link CONFLICTING_ROLE_PAIRS} — assigning a role that conflicts with the
    * user's current role throws a BadRequestException.
    */
-  async assignRole(userId: string, newRole: Role): Promise<User> {
+  async assignRole(
+    userId: string,
+    newRole: Role,
+    auditContext?: { actorId?: string; actorRole?: string; reason?: string },
+  ): Promise<User> {
     const user = await this.findOneOrFail(userId);
+    const previousRole = user.role;
+    if (previousRole === newRole) return user;
 
-    this.assertNoRoleConflict(user.role, newRole);
+    const action =
+      newRole === Role.USER
+        ? SensitiveAction.ROLE_REVOKED
+        : SensitiveAction.ROLE_ASSIGNED;
+    const reason =
+      auditContext?.reason?.trim() || `Role changed from ${previousRole} to ${newRole}`;
+    const auditInput = {
+      action,
+      actorId: auditContext?.actorId ?? userId,
+      actorType: auditContext?.actorId
+        ? AuditActorType.MAINTAINER
+        : AuditActorType.USER,
+      actorRole: auditContext?.actorRole,
+      resourceType: "user",
+      resourceId: user.id,
+      reason,
+      beforeState: { role: previousRole },
+      afterState: { role: newRole },
+    };
+
+    try {
+      this.assertNoRoleConflict(previousRole, newRole);
+    } catch (error) {
+      await this.sensitiveActionAudit.recordSensitiveAction({
+        ...auditInput,
+        status: SensitiveActionStatus.FAILED,
+      });
+      throw error;
+    }
 
     user.role = newRole;
-    return this.userRepository.save(user);
+    const saved = await this.userRepository.save(user);
+    await this.sensitiveActionAudit.recordSensitiveAction(auditInput);
+    return saved;
   }
 
   /**
@@ -99,5 +147,65 @@ export class UserService {
           `These roles are mutually exclusive to preserve separation of duties.`,
       );
     }
+  }
+
+  /**
+   * Guarded deterministic lifecycle transition for User entity.
+   */
+  async transitionLifecycleState(
+    userId: string,
+    targetState: UserLifecycleState,
+    auditContext?: { actorId?: string; actorRole?: string; reason?: string },
+  ): Promise<User> {
+    const user = await this.findOneOrFail(userId);
+    const currentState = deriveUserLifecycleState(user);
+
+    await UserStateMachine.assertCanTransition(
+      currentState,
+      targetState,
+      auditContext,
+      { resourceId: userId, resourceType: "user" },
+    );
+
+    const previousLifecycleState = currentState;
+    user.lifecycleState = targetState.toLowerCase() as UserStatus;
+
+    if (targetState === UserLifecycleState.ACTIVE) {
+      user.isActive = true;
+    } else if (
+      targetState === UserLifecycleState.SUSPENDED ||
+      targetState === UserLifecycleState.LOCKED ||
+      targetState === UserLifecycleState.DEACTIVATED ||
+      targetState === UserLifecycleState.ARCHIVED
+    ) {
+      user.isActive = false;
+    }
+
+    const saved = await this.userRepository.save(user);
+
+    const action =
+      targetState === UserLifecycleState.SUSPENDED
+        ? SensitiveAction.USER_SUSPENDED
+        : targetState === UserLifecycleState.ACTIVE
+        ? SensitiveAction.USER_REACTIVATED
+        : targetState === UserLifecycleState.ARCHIVED
+        ? SensitiveAction.USER_DELETED
+        : SensitiveAction.LIFECYCLE_STATE_TRANSITION;
+
+    await this.sensitiveActionAudit.recordSensitiveAction({
+      action,
+      actorId: auditContext?.actorId ?? userId,
+      actorType: auditContext?.actorId ? AuditActorType.MAINTAINER : AuditActorType.USER,
+      actorRole: auditContext?.actorRole,
+      resourceType: "user",
+      resourceId: user.id,
+      reason:
+        auditContext?.reason?.trim() ||
+        `User lifecycle state transitioned from ${previousLifecycleState} to ${targetState}`,
+      beforeState: { lifecycleState: previousLifecycleState, isActive: !user.isActive },
+      afterState: { lifecycleState: targetState, isActive: user.isActive },
+    });
+
+    return saved;
   }
 }

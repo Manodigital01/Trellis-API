@@ -12,6 +12,7 @@ import { User } from "../user/entities/user.entity";
 import { EmailVerification } from "./entities/email-verification.entity";
 import { EmailService } from "./email.service";
 import { Wallet } from "./entities/wallet.entity";
+import { normalizeEmail } from "../../common/decorators/is-rfc-email.decorator";
 
 @Injectable()
 export class EmailLinkingService {
@@ -41,7 +42,7 @@ export class EmailLinkingService {
 
     // Normalize addresses
     const normalizedWallet = walletAddress.toLowerCase();
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
     // Find wallet and user
     const wallet = await this.walletRepository.findOne({
@@ -210,7 +211,7 @@ export class EmailLinkingService {
    * Get user by email (for recovery)
    */
   async getUserByEmail(email: string): Promise<User | null> {
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
     return this.userRepository.findOne({
       where: { email: normalizedEmail, emailVerified: true },
     });

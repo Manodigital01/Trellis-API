@@ -42,6 +42,10 @@ async function bootstrap() {
   try {
     // Create app - we can't use ConfigService in the logger config yet because app isn't fully initialized
     app = await NestFactory.create(AppModule, {
+    // Keep the untouched request bytes available on `req.rawBody`: payment
+    // webhook signatures are computed over the exact payload, so the JSON
+    // parser must preserve it while it parses.
+    rawBody: true,
       logger: ["log", "error", "warn", "debug", "verbose"],
     });
   } catch (createAppError) {
@@ -51,6 +55,10 @@ async function bootstrap() {
     );
     // Create a minimal app to still serve Swagger if possible
     app = await NestFactory.create(AppModule, {
+    // Keep the untouched request bytes available on `req.rawBody`: payment
+    // webhook signatures are computed over the exact payload, so the JSON
+    // parser must preserve it while it parses.
+    rawBody: true,
       logger: ["log", "error", "warn"],
       abortOnError: false,
     });

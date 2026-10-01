@@ -12,6 +12,9 @@ import { Global, Module } from "@nestjs/common";
 // Re-export the transform utilities so feature modules can import from here.
 export * from "./schema-version";
 export * from "./compatibility.transforms";
+// Re-exported so feature modules can import the deprecation opt-in from the
+// versioning entry point rather than reaching into the decorator file (#142).
+export * from "./deprecated-api.decorator";
 
 @Global()
 @Module({})

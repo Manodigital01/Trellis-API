@@ -1,6 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { BackgroundWorkerService } from "../background-worker.service";
-import { JobStatus, JobPriority, DEFAULT_RETRY_POLICY } from "../worker.interface";
+import { BackgroundWorkerService } from "./background-worker.service";
+import { JobStatus, JobPriority, DEFAULT_RETRY_POLICY } from "./worker.interface";
 
 describe("BackgroundWorkerService", () => {
   let service: BackgroundWorkerService;
@@ -10,6 +10,7 @@ describe("BackgroundWorkerService", () => {
     mockQueue = {
       add: jest.fn().mockResolvedValue({ id: "job_123" }),
       remove: jest.fn().mockResolvedValue(undefined),
+      getJob: jest.fn().mockResolvedValue({ remove: jest.fn().mockResolvedValue(undefined) }),
       on: jest.fn(),
     };
 
@@ -24,6 +25,7 @@ describe("BackgroundWorkerService", () => {
     }).compile();
 
     service = module.get<BackgroundWorkerService>(BackgroundWorkerService);
+    service.onModuleInit();
   });
 
   afterEach(() => {
@@ -188,7 +190,7 @@ describe("BackgroundWorkerService", () => {
 
       const cancelled = await service.cancelJob(job.id);
       expect(cancelled).toBe(true);
-      expect(mockQueue.remove).toHaveBeenCalledWith(job.id);
+      expect(mockQueue.getJob).toHaveBeenCalledWith(job.id);
     });
 
     it("should not cancel a completed job", async () => {

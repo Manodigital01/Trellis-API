@@ -7,6 +7,7 @@ import { Repository } from "typeorm";
 import { TokenBlacklistService } from "./token-blacklist.service";
 import { EventEmitter2 } from "@nestjs/event-emitter";
 import { REFERRAL_REGISTERED_EVENT } from "src/growth/referral/referral-registered.event";
+import { ReferralFraudService } from "src/growth/referral/referral-fraud.service";
 import {
   ConflictException,
   UnauthorizedException,
@@ -81,6 +82,16 @@ describe("AuthService", () => {
           useValue: mockTokenBlacklistService,
         },
         { provide: EventEmitter2, useValue: mockEventEmitter },
+        {
+          provide: ReferralFraudService,
+          useValue: {
+            screenReferralSignup: jest.fn().mockResolvedValue({
+              status: "approved",
+              reasons: [],
+            }),
+            holdForReview: jest.fn(),
+          },
+        },
       ],
     }).compile();
 

@@ -1,7 +1,8 @@
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { DashboardController } from "./dashboard.controller";
 import { DashboardService } from "./dashboard.service";
 import { PortfolioModule } from "src/investment/portfolio/portfolio.module";
+import { RiskManagementModule } from "src/investment/risk-management/risk-management.module";
 import { JwtModule } from "@nestjs/jwt";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 
@@ -20,7 +21,8 @@ import { WsExceptionFilter } from "./websocket/filters/ws-exception.filter";
 
 @Module({
   imports: [
-    PortfolioModule,
+    forwardRef(() => PortfolioModule),
+    RiskManagementModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

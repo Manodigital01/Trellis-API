@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { ReconnectionConfig } from "../interfaces/websocket.interfaces";
 
 /**
@@ -31,8 +31,8 @@ export class ReconnectionService {
     | ((attempts: number, totalDelay: number) => void)
     | null = null;
 
-  constructor(config?: Partial<ReconnectionConfig>) {
-    this.config = { ...this.defaultConfig, ...config };
+  constructor(@Optional() config?: Partial<ReconnectionConfig>) {
+    this.config = { ...this.defaultConfig, ...(config || {}) };
     this.currentDelay = this.config.baseDelay;
   }
 
@@ -220,7 +220,7 @@ export class WebSocketClientManager {
   private token: string | null = null;
   private userId: string | null = null;
 
-  constructor(config?: Partial<ReconnectionConfig>) {
+  constructor(@Optional() config?: Partial<ReconnectionConfig>) {
     this.reconnectService = new ReconnectionService(config);
   }
 

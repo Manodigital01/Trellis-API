@@ -27,6 +27,7 @@ import { ProtocolAdapter } from "./protocols/protocol-adapter.interface";
 import { DeFiController } from "./defi.controller";
 import { TradeController } from "./trade.controller";
 import { TradeLockService } from "./trade-lock.service";
+import { PolicyModule } from "../policy/policy.module";
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { TradeLockService } from "./trade-lock.service";
       },
     ),
     DiscoveryModule,
+    PolicyModule,
   ],
   providers: [
     // Protocol Adapters

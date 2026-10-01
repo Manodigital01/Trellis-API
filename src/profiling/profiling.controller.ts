@@ -10,6 +10,7 @@ import {
   HttpStatus,
   UseGuards,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Response } from "express";
 import * as fs from "fs";
 import * as path from "path";
@@ -20,18 +21,36 @@ import {
 } from "./profiling.service";
 import { RolesGuard } from "../common/guard/roles.guard";
 import { Role } from "../common/guard/roles.enum";
-import { Public } from "../common/decorators/public.decorator";
+import { JwtAuthGuard } from "../core/auth/guards/jwt-auth.guard";
+import { Roles } from "../common/guard/roles.decorator";
 
 @Controller("api/v1/profiling")
-@UseGuards(RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.ADMIN)
 export class ProfilingController {
-  constructor(private readonly profilingService: ProfilingService) {}
+  private lastHeapSnapshotAt = 0;
+
+  constructor(
+    private readonly profilingService: ProfilingService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  private ensureEnabled() {
+    if (
+      this.configService.get<string>("NODE_ENV") === "production" &&
+      this.configService.get<boolean | string>("ENABLE_PROFILING") !== true &&
+      this.configService.get<string>("ENABLE_PROFILING") !== "true"
+    ) {
+      throw new HttpException("Profiling is disabled", HttpStatus.NOT_FOUND);
+    }
+  }
 
   /**
    * Start CPU profiling for a specified duration
    */
   @Post("cpu/start")
   async startCPUProfile(@Query("duration") duration?: string) {
+    this.ensureEnabled();
     const durationMs = duration ? parseInt(duration, 10) : 30000;
     return this.profilingService.startCPUProfile(durationMs);
   }
@@ -41,6 +60,11 @@ export class ProfilingController {
    */
   @Post("heap/snapshot")
   async takeHeapSnapshot() {
+    this.ensureEnabled();
+    if (Date.now() - this.lastHeapSnapshotAt < 15 * 60 * 1000) {
+      throw new HttpException("Heap snapshots are limited to once per 15 minutes", HttpStatus.TOO_MANY_REQUESTS);
+    }
+    this.lastHeapSnapshotAt = Date.now();
     return this.profilingService.takeHeapSnapshot();
   }
 
@@ -49,6 +73,7 @@ export class ProfilingController {
    */
   @Get("profiles")
   listProfiles(): ProfileMetadata[] {
+    this.ensureEnabled();
     return this.profilingService.listProfiles();
   }
 
@@ -57,6 +82,7 @@ export class ProfilingController {
    */
   @Get("profiles/:id/download")
   downloadProfile(@Param("id") id: string, @Res() res: Response) {
+    this.ensureEnabled();
     const filePath = this.profilingService.getProfilePath(id);
     if (!filePath || !fs.existsSync(filePath)) {
       throw new HttpException("Profile not found", HttpStatus.NOT_FOUND);
@@ -73,6 +99,7 @@ export class ProfilingController {
    */
   @Delete("profiles/:id")
   deleteProfile(@Param("id") id: string) {
+    this.ensureEnabled();
     const success = this.profilingService.deleteProfile(id);
     if (!success) {
       throw new HttpException("Profile not found", HttpStatus.NOT_FOUND);
@@ -85,6 +112,7 @@ export class ProfilingController {
    */
   @Get("hot-functions")
   getHotFunctions(): HotFunction[] {
+    this.ensureEnabled();
     return this.profilingService.getHotFunctions();
   }
 
@@ -93,6 +121,7 @@ export class ProfilingController {
    */
   @Get("timelines")
   getRequestTimelines() {
+    this.ensureEnabled();
     return this.profilingService.getRequestTimelines();
   }
 
@@ -101,6 +130,7 @@ export class ProfilingController {
    */
   @Get("regressions/check")
   checkRegressions() {
+    this.ensureEnabled();
     const regressions = this.profilingService.checkPerformanceRegressions();
     return {
       regressions,
@@ -113,6 +143,7 @@ export class ProfilingController {
    */
   @Get("memory/stats")
   getMemoryStats() {
+    this.ensureEnabled();
     return this.profilingService.getMemoryStats();
   }
 
@@ -120,8 +151,8 @@ export class ProfilingController {
    * Serve profiling visualization UI
    */
   @Get("ui")
-  @Public()
   serveProfilingUI(@Res() res: Response) {
+    this.ensureEnabled();
     const html = `
 <!DOCTYPE html>
 <html>

@@ -1,6 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { ConfigService } from "@nestjs/config";
-import { Wallet } from "ethers";
+import { Wallet, keccak256, toUtf8Bytes } from "ethers";
 import { PayloadSigningService } from "../../src/blockchain/oracle/services/payload-signing.service";
 
 describe("PayloadSigningService", () => {
@@ -59,6 +59,28 @@ describe("PayloadSigningService", () => {
       const hash2 = service.hashPayload(payload2);
 
       expect(hash1).not.toBe(hash2);
+    });
+
+    it("canonicalizes object key order and JSON whitespace", () => {
+      expect(service.hashPayload({ z: 1, a: { y: 2, x: 3 } })).toBe(
+        service.hashPayload({ a: { x: 3, y: 2 }, z: 1 }),
+      );
+    });
+
+    it("normalizes negative zero and rejects unsafe integers", () => {
+      expect(service.hashPayload({ value: -0 })).toBe(
+        service.hashPayload({ value: 0 }),
+      );
+      expect(() => service.hashPayload({ value: Number.MAX_SAFE_INTEGER + 1 })).toThrow(
+        "safe integers",
+      );
+    });
+
+    it("normalizes payload type casing in signed data", () => {
+      const args = ["0x" + "1".repeat(64), "0", 1, { value: 1 }] as const;
+      expect(service.createStructuredData("ORACLE_UPDATE", ...args).value).toEqual(
+        service.createStructuredData("oracle_update", ...args).value,
+      );
     });
   });
 
@@ -141,6 +163,37 @@ describe("PayloadSigningService", () => {
   });
 
   describe("verifySignature", () => {
+    it("verifies a legacy insertion-order signature", async () => {
+      const payload = { z: 1, a: 2 };
+      const payloadType = "oracle_update";
+      const nonce = "0";
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const legacyHash = keccak256(toUtf8Bytes(JSON.stringify(payload)));
+      const { domain, types, value } = service.createStructuredData(
+        payloadType,
+        legacyHash,
+        nonce,
+        expiresAt,
+        payload,
+      );
+      const signature = await testWallet.signTypedData(domain, types, {
+        ...value,
+        data: JSON.stringify(payload),
+      });
+
+      expect(
+        service.verifySignature(
+          signature,
+          payloadType,
+          legacyHash,
+          nonce,
+          expiresAt,
+          payload,
+          testWallet.address,
+        ),
+      ).toBe(true);
+    });
+
     it("should verify a valid signature", async () => {
       const payloadType = "oracle_update";
       const payload = { value: 100 };

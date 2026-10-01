@@ -6,6 +6,8 @@ import { RateLimitMiddleware } from "./rate-limit.middleware";
 import { RateLimitingController } from "./rate-limiting.controller";
 import { RATE_LIMIT_CONFIG } from "./rate-limiting.constants";
 import { RateLimitStrategy } from "./interfaces";
+import { ExpensiveOpsRateLimiterService } from "./expensive-ops-rate-limiter.service";
+import { ExpensiveOpsGuard } from "./expensive-ops.guard";
 
 @Global()
 @Module({})
@@ -37,11 +39,15 @@ export class RateLimitingModule implements OnModuleInit {
         RateLimiterService,
         DistributedRateLimitGuard,
         RateLimitMiddleware,
+        ExpensiveOpsRateLimiterService,
+        ExpensiveOpsGuard,
       ],
       exports: [
         RateLimiterService,
         DistributedRateLimitGuard,
         RateLimitMiddleware,
+        ExpensiveOpsRateLimiterService,
+        ExpensiveOpsGuard,
       ],
     };
   }

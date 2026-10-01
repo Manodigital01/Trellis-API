@@ -1,3 +1,4 @@
+import 'multer';
 import {
   Controller,
   Get,
@@ -39,6 +40,7 @@ import {
   FileSearchDto,
   FileCleanupDto,
 } from "./dto/file-upload.dto";
+import { FileUploadPipe } from "./pipes/file-upload.pipe";
 
 @ApiTags("Files")
 @ApiBearerAuth()
@@ -83,7 +85,7 @@ export class FileUploadController {
   })
   @ApiResponse({ status: 201, description: "File uploaded and processed" })
   async uploadFile(
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(new FileUploadPipe()) file: Express.Multer.File,
     @Body() dto: UploadFileDto,
   ) {
     const userId = "system";

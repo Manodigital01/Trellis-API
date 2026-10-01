@@ -21,3 +21,9 @@ export {
   type HistoryQuery,
 } from "./metrics-history.service";
 export { Monitor, TrackMetric, type MonitorOptions } from "./monitor.decorator";
+export { MaintainerInsightsService } from "./maintainer-insights/maintainer-insights.service";
+export { MaintainerInsightsController } from "./maintainer-insights/maintainer-insights.controller";
+export { MaintainerInsightsJobService } from "./maintainer-insights/maintainer-insights-job.service";
+export { MaintainerAggregateMetric } from "./maintainer-insights/entities/maintainer-aggregate-metric.entity";
+export * from "./maintainer-insights/privacy/privacy-boundary.definition";
+export * from "./maintainer-insights/dto/maintainer-insights.dto";

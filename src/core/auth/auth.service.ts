@@ -19,6 +19,10 @@ import {
   REFERRAL_REGISTERED_EVENT,
   ReferralRegisteredEvent,
 } from "src/growth/referral/referral-registered.event";
+import {
+  ReferralFraudService,
+  ReferralReviewStatus,
+} from "src/growth/referral/referral-fraud.service";
 
 @Injectable()
 export class AuthService {
@@ -29,6 +33,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly tokenBlacklist: TokenBlacklistService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly referralFraud: ReferralFraudService,
   ) {}
 
   /**
@@ -86,6 +91,29 @@ export class AuthService {
     await this.userRepository.save(user);
 
     if (referredBy) {
+      // Screen the referral before attribution: fraudulent signups are held
+      // for admin review instead of entering the reward pipeline.
+      const evaluation = await this.referralFraud.screenReferralSignup({
+        userId: user.id,
+        referringUserId: referredBy.id,
+        walletAddress: user.walletAddress,
+        referrerWalletAddress: referredBy.walletAddress,
+        registeredAt: user.createdAt ?? new Date(),
+      });
+      if (evaluation.status === ReferralReviewStatus.PendingReview) {
+        this.referralFraud.holdForReview(
+          {
+            userId: user.id,
+            referringUserId: referredBy.id,
+            walletAddress: user.walletAddress,
+            referrerWalletAddress: referredBy.walletAddress,
+            registeredAt: user.createdAt ?? new Date(),
+          },
+          referredBy.referralCode!,
+          evaluation,
+        );
+      }
+
       const event: ReferralRegisteredEvent = {
         userId: user.id,
         referringUserId: referredBy.id,

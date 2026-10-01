@@ -24,6 +24,7 @@ import {
 } from "src/infrastructure/audit/entities/provenance-record.entity";
 import { resolveRateLimitTierFromRole } from "src/config/quota.config";
 import { normalizeRole } from "src/common/guard/roles.enum";
+import { normalizeEmail } from "../../common/decorators/is-rfc-email.decorator";
 
 export interface AuthPayload {
   address: string;
@@ -529,7 +530,7 @@ export class WalletAuthService {
     email: string,
     recoveryToken: string,
   ): Promise<{ message: string; walletAddress: string; challenge: string }> {
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
     // Find user by email
     const user = await this.userRepository.findOne({

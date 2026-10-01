@@ -38,6 +38,21 @@ export class RefreshToken {
   @Column({ nullable: true })
   replacedByToken: string;
 
+  /**
+   * Issue #144: every refresh token descended from one login shares a
+   * `familyId`. Rotation already revokes the token it replaces, but nothing
+   * links the chain together, so a stolen-then-replayed token is merely
+   * rejected rather than being recognised as a replay. With the family id,
+   * presenting an already-revoked token identifies the whole family and the
+   * entire set is revoked at once.
+   *
+   * Nullable so rows predating this column remain valid; such a token simply
+   * has no family and cannot participate in family-wide revocation.
+   */
+  @Column({ type: "uuid", nullable: true })
+  @Index()
+  familyId?: string;
+
   @Column()
   ipAddress: string;
 

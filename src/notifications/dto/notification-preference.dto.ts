@@ -15,7 +15,7 @@ import {
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { NotificationCategory } from '../entities/notification.entity';
-import { NotificationChannelPreference } from '../entities/notification-preference.entity';
+import { NotificationChannelPreference, NotificationDeliveryMode } from '../entities/notification-preference.entity';
 
 export class UpdateNotificationPreferenceDto {
   @ApiProperty({ enum: NotificationCategory })
@@ -29,6 +29,11 @@ export class UpdateNotificationPreferenceDto {
   @ApiProperty({ enum: NotificationChannelPreference })
   @IsEnum(NotificationChannelPreference)
   preference: NotificationChannelPreference;
+
+  @ApiPropertyOptional({ enum: NotificationDeliveryMode })
+  @IsOptional()
+  @IsEnum(NotificationDeliveryMode)
+  deliveryMode?: NotificationDeliveryMode;
 
   @ApiPropertyOptional({ enum: ['hourly', 'daily', 'weekly'], description: 'For digest mode' })
   @IsOptional()

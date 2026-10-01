@@ -146,6 +146,13 @@ export class LoggerModule implements NestModule {
       inject: [LoggerService],
     };
 
+    const performanceInterceptorProvider: Provider = {
+      provide: PerformanceInterceptor,
+      useFactory: (svc: LoggerService) =>
+        new PerformanceInterceptor(svc, opts.performanceConfig ?? {}),
+      inject: [LoggerService],
+    };
+
     const interceptorProviders: Provider[] =
       LoggerModule.buildInterceptorProviders(opts);
 
@@ -155,6 +162,7 @@ export class LoggerModule implements NestModule {
         loggerOptionsProvider,
         loggerServiceProvider,
         middlewareProvider,
+        performanceInterceptorProvider,
         ...interceptorProviders,
       ],
       exports: [LoggerService, HttpLoggingMiddleware, PerformanceInterceptor],
@@ -193,6 +201,13 @@ export class LoggerModule implements NestModule {
       inject: [LoggerService],
     };
 
+    const performanceInterceptorProvider: Provider = {
+      provide: PerformanceInterceptor,
+      useFactory: (svc: LoggerService) =>
+        new PerformanceInterceptor(svc, { thresholdMs: 1000 }),
+      inject: [LoggerService],
+    };
+
     return {
       module: LoggerModule,
       imports: asyncOpts.imports ?? [],
@@ -200,11 +215,10 @@ export class LoggerModule implements NestModule {
         loggerOptionsProvider,
         loggerServiceProvider,
         middlewareProvider,
+        performanceInterceptorProvider,
         {
           provide: APP_INTERCEPTOR,
-          useFactory: (svc: LoggerService) =>
-            new PerformanceInterceptor(svc, { thresholdMs: 1000 }),
-          inject: [LoggerService],
+          useExisting: PerformanceInterceptor,
         },
       ],
       exports: [LoggerService, HttpLoggingMiddleware, PerformanceInterceptor],

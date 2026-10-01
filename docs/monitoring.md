@@ -62,6 +62,7 @@ metrics include:
 | `trellis_conversion_funnel_total` | Counter | `funnel`, `step`, `status` | State transitions across conversion funnels. |
 
 > See [OBSERVABILITY_TELEMETRY.md](./OBSERVABILITY_TELEMETRY.md) for full documentation on business operation telemetry, structured logging, PromQL queries, and alerting thresholds.
+> See [MAINTAINER_METRICS_PRIVACY.md](./MAINTAINER_METRICS_PRIVACY.md) for full documentation on privacy-preserving analytics aggregation, safe dimension boundaries, and maintainer insights APIs.
 
 ### Cardinality safety
 

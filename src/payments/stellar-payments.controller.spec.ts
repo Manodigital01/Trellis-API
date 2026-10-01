@@ -2,6 +2,7 @@ import { HttpService } from "@nestjs/axios";
 import { INestApplication } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { Test, TestingModule } from "@nestjs/testing";
+import { getRepositoryToken } from "@nestjs/typeorm";
 import {
   Account,
   Keypair,
@@ -14,6 +15,7 @@ import { JwtAuthGuard } from "src/core/auth/jwt.guard";
 import { RolesGuard } from "src/common/guard/roles.guard";
 import { createGlobalValidationPipe } from "src/common/pipes/validation.pipe";
 import { STELLAR_HORIZON_SERVER } from "./adapters/stellar/stellar.constants";
+import { PaymentOperation } from "./entities/payment-operation.entity";
 import { PaymentsModule } from "./payments.module";
 
 /**
@@ -33,6 +35,43 @@ describe("Stellar payments convenience routes", () => {
   const destKp = Keypair.random();
 
   let app: INestApplication;
+  const operations: PaymentOperation[] = [];
+  let operationSequence = 0;
+  const operationRepository = {
+    create: (values: Partial<PaymentOperation>) =>
+      Object.assign(new PaymentOperation(), values, {
+        operationId: `operation-${++operationSequence}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    findOne: async ({ where }: { where: Partial<PaymentOperation> }) =>
+      operations.find((operation) =>
+        Object.entries(where).every(([key, value]) => operation[key] === value),
+      ) ?? null,
+    save: async (operation: PaymentOperation) => {
+      operation.updatedAt = new Date();
+      const index = operations.findIndex(
+        (row) => row.operationId === operation.operationId,
+      );
+      if (index === -1) {
+        operations.push(operation);
+      } else {
+        operations[index] = operation;
+      }
+      return operation;
+    },
+    update: async (where: Partial<PaymentOperation>, values: Partial<PaymentOperation>) => {
+      const operation = operations.find((row) =>
+        Object.entries(where).every(([key, value]) => row[key] === value),
+      );
+      if (!operation) {
+        return { affected: 0 };
+      }
+      Object.assign(operation, values, { updatedAt: new Date() });
+      return { affected: 1 };
+    },
+    find: async () => [],
+  };
 
   const stellarServer = {
     loadAccount: jest
@@ -86,10 +125,20 @@ describe("Stellar payments convenience routes", () => {
     })
       .overrideProvider(STELLAR_HORIZON_SERVER)
       .useValue(stellarServer)
+      .overrideProvider(getRepositoryToken(PaymentOperation))
+      .useValue(operationRepository)
       .overrideProvider(HttpService)
       .useValue(httpService)
       .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
+      .useValue({
+        canActivate: (context) => {
+          context.switchToHttp().getRequest().user = {
+            id: "test-user",
+            sub: "test-user",
+          };
+          return true;
+        },
+      })
       .overrideGuard(RolesGuard)
       .useValue({ canActivate: () => true })
       .compile();
@@ -112,10 +161,14 @@ describe("Stellar payments convenience routes", () => {
     idempotencyKey: "idem-stellar-alias",
   };
 
+  let createSequence = 0;
   const create = () =>
     request(app.getHttpServer())
       .post("/api/v1/payments/stellar/create")
-      .send(createBody);
+      .send({
+        ...createBody,
+        idempotencyKey: `${createBody.idempotencyKey}-${++createSequence}`,
+      });
 
   it("POST /create pins Stellar even under a grantfox env default", async () => {
     const res = await create().expect(201);

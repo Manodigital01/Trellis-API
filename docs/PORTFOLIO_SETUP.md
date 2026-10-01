@@ -24,6 +24,8 @@ Create a `.env` file in the root directory:
 ```env
 # Database
 DATABASE_URL=postgresql://user:password@localhost:5432/alian-structure
+# Keep the legacy identifier by default; set DB_DATABASE during a controlled migration.
+DB_DATABASE=alian-structure
 DATABASE_SYNC=true
 DATABASE_LOGGING=true
 

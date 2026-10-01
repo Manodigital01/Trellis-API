@@ -51,6 +51,7 @@ export class OracleService {
     const payloadHash = this.payloadSigningService.hashPayload(
       createPayloadDto.payload,
     );
+    const payloadType = createPayloadDto.payloadType.trim().toLowerCase() as PayloadType;
 
     // Set expiration time
     const expiresAt = new Date();
@@ -61,7 +62,7 @@ export class OracleService {
     // Create structured data hash (for EIP-712)
     const structuredDataHash =
       this.payloadSigningService.computeStructuredDataHash(
-        createPayloadDto.payloadType,
+        payloadType,
         payloadHash,
         nonce,
         Math.floor(expiresAt.getTime() / 1000),
@@ -70,7 +71,7 @@ export class OracleService {
 
     // Create payload entity
     const payload = this.payloadRepository.create({
-      payloadType: createPayloadDto.payloadType,
+      payloadType,
       signerAddress: signerAddress.toLowerCase(),
       nonce,
       payload: createPayloadDto.payload,

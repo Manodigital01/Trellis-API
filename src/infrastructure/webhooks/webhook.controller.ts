@@ -10,7 +10,11 @@ import {
   HttpStatus,
   Logger,
   Query,
+  Req,
+  RawBodyRequest,
+  ParseUUIDPipe,
 } from "@nestjs/common";
+import { Request } from "express";
 import {
   ApiTags,
   ApiBearerAuth,
@@ -22,6 +26,7 @@ import {
 import { WebhookSubscriptionService } from "./services/webhook-subscription.service";
 import { WebhookEventService } from "./services/webhook-event.service";
 import { WebhookDeliveryService } from "./services/webhook-delivery.service";
+import { WebhookInboundService } from "./services/webhook-inbound.service";
 import {
   CreateWebhookSubscriptionDto,
   UpdateWebhookSubscriptionDto,
@@ -38,6 +43,7 @@ export class WebhookController {
     private readonly subscriptionService: WebhookSubscriptionService,
     private readonly eventService: WebhookEventService,
     private readonly deliveryService: WebhookDeliveryService,
+    private readonly inboundService: WebhookInboundService,
   ) {}
 
   // ── Subscriptions ───────────────────────────────────────────────────
@@ -45,10 +51,11 @@ export class WebhookController {
   @Post("subscriptions")
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: "Create a webhook subscription" })
-  @ApiResponse({ status: 201, description: "Subscription created with signing key" })
-  async createSubscription(
-    @Body() dto: CreateWebhookSubscriptionDto,
-  ) {
+  @ApiResponse({
+    status: 201,
+    description: "Subscription created with signing key",
+  })
+  async createSubscription(@Body() dto: CreateWebhookSubscriptionDto) {
     // TODO: extract userId from auth guard
     const userId = "system";
     const sub = await this.subscriptionService.create(userId, dto);
@@ -112,12 +119,15 @@ export class WebhookController {
     return {
       success: true,
       newSigningKey: result.newSigningKey,
-      message: "Store the new signingKey securely — it will not be shown again.",
+      message:
+        "Store the new signingKey securely — it will not be shown again.",
     };
   }
 
   @Put("subscriptions/:id/status")
-  @ApiOperation({ summary: "Toggle subscription status (active/paused/disabled)" })
+  @ApiOperation({
+    summary: "Toggle subscription status (active/paused/disabled)",
+  })
   @ApiParam({ name: "id" })
   @ApiQuery({ name: "status", enum: ["active", "paused", "disabled"] })
   async toggleStatus(
@@ -125,17 +135,49 @@ export class WebhookController {
     @Query("status") status: "active" | "paused" | "disabled",
   ) {
     const userId = "system";
-    const sub = await this.subscriptionService.toggleStatus(id, userId, status as any);
+    const sub = await this.subscriptionService.toggleStatus(
+      id,
+      userId,
+      status as any,
+    );
     const { signingKey, ...rest } = sub;
     return { success: true, subscription: rest };
   }
 
   // ── Events ──────────────────────────────────────────────────────────
 
+  @Post("inbound/:subscriptionId")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Receive a signed inbound webhook event",
+    description:
+      "Requires X-Webhook-Timestamp (unix seconds) and X-Webhook-Signature (`sha256=` HMAC-SHA256 over `<timestamp>.<raw body>`). The JSON body must contain id/eventId and type/eventType.",
+  })
+  @ApiParam({ name: "subscriptionId" })
+  @ApiResponse({ status: 202, description: "Event accepted exactly once." })
+  @ApiResponse({
+    status: 400,
+    description: "Malformed, stale, or invalidly signed event.",
+  })
+  @ApiResponse({ status: 409, description: "Duplicate event ID." })
+  async receiveInbound(
+    @Param("subscriptionId", new ParseUUIDPipe()) subscriptionId: string,
+    @Req() request: RawBodyRequest<Request>,
+  ) {
+    return this.inboundService.accept(
+      subscriptionId,
+      request.rawBody,
+      request.headers,
+    );
+  }
+
   @Post("events")
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: "Publish a webhook event" })
-  @ApiResponse({ status: 201, description: "Event published and deliveries enqueued" })
+  @ApiResponse({
+    status: 201,
+    description: "Event published and deliveries enqueued",
+  })
   async publishEvent(@Body() dto: PublishWebhookEventDto) {
     const event = await this.eventService.publishEvent(dto);
     return {
@@ -209,7 +251,10 @@ export class WebhookController {
   async retryDeadLetter(@Param("id") id: string) {
     const delivery = await this.deliveryService.retryDeadLetter(id);
     if (!delivery) {
-      return { success: false, message: "Dead letter not found or already retried" };
+      return {
+        success: false,
+        message: "Dead letter not found or already retried",
+      };
     }
     return { success: true, delivery };
   }
@@ -217,7 +262,9 @@ export class WebhookController {
   // ── Metrics ─────────────────────────────────────────────────────────
 
   @Get("metrics")
-  @ApiOperation({ summary: "Get webhook delivery metrics and reliability stats" })
+  @ApiOperation({
+    summary: "Get webhook delivery metrics and reliability stats",
+  })
   async getMetrics() {
     const metrics = await this.deliveryService.getMetrics();
     return { success: true, metrics };

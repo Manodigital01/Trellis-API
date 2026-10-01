@@ -34,6 +34,23 @@ export class NotificationService {
    * Send a single notification, optionally through multiple channels.
    */
   async send(dto: SendNotificationDto): Promise<Notification> {
+    // Check deduplication key (for critical lifecycle and recovery events)
+    if (dto.deduplicationKey) {
+      const existing = await this.notificationRepo.findOne({
+        where: {
+          userId: dto.userId,
+          deduplicationKey: dto.deduplicationKey,
+          deleted: false,
+        },
+      });
+      if (existing) {
+        this.logger.log(
+          `Notification deduplicated for user ${dto.userId} with key "${dto.deduplicationKey}" (id: ${existing.id})`,
+        );
+        return existing;
+      }
+    }
+
     // Check aggregation
     if (dto.aggregationKey) {
       const aggResult = await this.aggregationService.checkAggregation(
@@ -58,6 +75,8 @@ export class NotificationService {
           templateVars: dto.templateVars,
           referenceId: dto.referenceId,
           referenceType: dto.referenceType,
+          deepLink: dto.deepLink,
+          deduplicationKey: dto.deduplicationKey,
           aggregationKey: dto.aggregationKey,
           aggregationCount: aggResult.currentCount,
           status: NotificationStatus.CANCELLED,
@@ -119,6 +138,8 @@ export class NotificationService {
       templateVars: dto.templateVars,
       referenceId: dto.referenceId,
       referenceType: dto.referenceType,
+      deepLink: dto.deepLink,
+      deduplicationKey: dto.deduplicationKey,
       aggregationKey: dto.aggregationKey,
       aggregationCount: dto.aggregationKey ? 1 : 0,
       maxAttempts: dto.maxAttempts || 5,

@@ -25,6 +25,16 @@ export enum TransactionType {
   OTHER = "other",
 }
 
+export enum TransactionStatus {
+  PENDING = "pending",
+  SUBMITTED = "submitted",
+  CONFIRMED = "confirmed",
+  FAILED = "failed",
+  CANCELLED = "cancelled",
+  TIMED_OUT = "timed_out",
+  REVERTED = "reverted",
+}
+
 @Entity("transactions")
 @Index(["portfolioId", "createdAt"])
 @Index(["portfolioId", "type"])
@@ -39,6 +49,13 @@ export class Transaction {
     enum: TransactionType,
   })
   type: TransactionType;
+
+  @Column({
+    type: "enum",
+    enum: TransactionStatus,
+    default: TransactionStatus.CONFIRMED,
+  })
+  status: TransactionStatus;
 
   @Column({ type: "timestamp", default: () => "CURRENT_TIMESTAMP" })
   date: Date;

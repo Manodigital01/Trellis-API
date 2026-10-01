@@ -19,6 +19,7 @@ import {
   SubmissionBatchService,
   FailureType,
 } from "./submission-batch.service";
+import { canonicalJson } from "../../../common/serialization/canonical-json";
 
 /**
  * Minimal ABI for Oracle contract submission
@@ -250,7 +251,7 @@ export class SubmitterService {
           payload.payloadHash,
           payload.nonce,
           Math.floor(payload.expiresAt.getTime() / 1000),
-          JSON.stringify(payload.payload),
+          canonicalJson(payload.payload),
           payload.signature,
           {
             gasLimit,
@@ -332,7 +333,7 @@ export class SubmitterService {
         payload.payloadHash,
         payload.nonce,
         Math.floor(payload.expiresAt.getTime() / 1000),
-        JSON.stringify(payload.payload),
+        canonicalJson(payload.payload),
         payload.signature,
       );
 
@@ -457,7 +458,7 @@ export class SubmitterService {
         payload.payloadHash,
         payload.nonce,
         Math.floor(payload.expiresAt.getTime() / 1000),
-        JSON.stringify(payload.payload),
+        canonicalJson(payload.payload),
         payload.signature,
         expectedSigner,
       );

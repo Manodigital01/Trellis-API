@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ethers } from "ethers";
+import { AppException } from "../../common/errors/app.exception";
+import { ErrorCode } from "../../common/errors/error-codes";
 import {
   ProtocolAdapter,
   PositionData,
@@ -41,6 +43,31 @@ export class AaveAdapter implements ProtocolAdapter {
 
   constructor(private readonly configService: ConfigService) {
     this.initializeProviders();
+  }
+
+  private async withGasFees(
+    tx: ethers.TransactionRequest,
+    provider: ethers.JsonRpcProvider,
+  ): Promise<TransactionData> {
+    const feeData = await provider.getFeeData();
+    const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? feeData.gasPrice ?? 0n;
+    const maxFeePerGas = feeData.maxFeePerGas ?? feeData.gasPrice ?? maxPriorityFeePerGas;
+    const maxGwei = this.configService.get<number>("MAX_GAS_FEE_GWEI", 100);
+    if (Number(ethers.formatUnits(maxFeePerGas, "gwei")) > maxGwei) {
+      throw new AppException(
+        `Gas fee ${ethers.formatUnits(maxFeePerGas, "gwei")} gwei exceeds configured cap ${maxGwei} gwei`,
+        422,
+        ErrorCode.PRECONDITION_FAILED,
+      );
+    }
+    return {
+      to: tx.to?.toString() ?? "",
+      from: tx.from?.toString() ?? "",
+      value: tx.value?.toString() ?? "0",
+      data: tx.data?.toString() ?? "",
+      maxFeePerGas: maxFeePerGas.toString(),
+      maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
+    };
   }
 
   private initializeProviders() {
@@ -177,12 +204,7 @@ export class AaveAdapter implements ProtocolAdapter {
         0,
       );
 
-      return {
-        to: tx.to || "",
-        from: address,
-        value: tx.value?.toString() || "0",
-        data: tx.data || "",
-      };
+      return this.withGasFees({ ...tx, from: address }, provider);
     } catch (error) {
       this.logger.error(`Error creating deposit transaction`, error);
       throw error;
@@ -216,12 +238,7 @@ export class AaveAdapter implements ProtocolAdapter {
         address,
       );
 
-      return {
-        to: tx.to || "",
-        from: address,
-        value: tx.value?.toString() || "0",
-        data: tx.data || "",
-      };
+      return this.withGasFees({ ...tx, from: address }, provider);
     } catch (error) {
       this.logger.error(`Error creating withdraw transaction`, error);
       throw error;
@@ -255,12 +272,7 @@ export class AaveAdapter implements ProtocolAdapter {
         address,
       );
 
-      return {
-        to: tx.to || "",
-        from: address,
-        value: tx.value?.toString() || "0",
-        data: tx.data || "",
-      };
+      return this.withGasFees({ ...tx, from: address }, provider);
     } catch (error) {
       this.logger.error(`Error creating borrow transaction`, error);
       throw error;
@@ -296,12 +308,7 @@ export class AaveAdapter implements ProtocolAdapter {
         address,
       );
 
-      return {
-        to: tx.to || "",
-        from: address,
-        value: tx.value?.toString() || "0",
-        data: tx.data || "",
-      };
+      return this.withGasFees({ ...tx, from: address }, provider);
     } catch (error) {
       this.logger.error(`Error creating repay transaction`, error);
       throw error;

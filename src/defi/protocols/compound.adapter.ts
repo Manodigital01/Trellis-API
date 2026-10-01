@@ -29,6 +29,22 @@ const CTOKEN_ABI = [
   "function repayBorrow(uint repayAmount)",
 ];
 
+const COMPOUND_EXCHANGE_RATE_SCALE = 10n ** 18n;
+
+const UNDERLYING_TOKEN_DECIMALS: Record<string, number> = {
+  USDC: 6,
+  DAI: 18,
+  USDT: 6,
+  WETH: 18,
+};
+
+export function convertCTokenBalanceToUnderlying(
+  cTokenBalance: bigint,
+  exchangeRate: bigint,
+): bigint {
+  return (cTokenBalance * exchangeRate) / COMPOUND_EXCHANGE_RATE_SCALE;
+}
+
 @Injectable()
 export class CompoundAdapter implements ProtocolAdapter {
   private logger = new Logger("CompoundAdapter");
@@ -92,16 +108,22 @@ export class CompoundAdapter implements ProtocolAdapter {
       const cToken = new ethers.Contract(cTokenAddress, CTOKEN_ABI, provider);
       const balance = await cToken.balanceOf(address);
       const exchangeRate = await cToken.exchangeRateStored();
-      const underlyingBalance = (balance * exchangeRate) / 1e18;
+      const underlyingBalance = convertCTokenBalanceToUnderlying(
+        balance,
+        exchangeRate,
+      );
+      const tokenDecimals = UNDERLYING_TOKEN_DECIMALS[token] ?? 18;
+      const formattedBalance = Number(
+        ethers.formatUnits(underlyingBalance, tokenDecimals),
+      );
 
       const price = await this.getTokenPrice(token);
-      const valueUSD =
-        Number(ethers.formatUnits(underlyingBalance, 18)) * price;
+      const valueUSD = formattedBalance * price;
       const apy = await this.getAPY(token, chain);
 
       return {
         token,
-        balance: Number(ethers.formatUnits(underlyingBalance, 18)),
+        balance: formattedBalance,
         valueUSD,
         apy,
         rewards: [

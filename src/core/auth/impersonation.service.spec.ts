@@ -3,7 +3,7 @@ import { ImpersonationService } from './impersonation.service';
 import { JwtService } from '@nestjs/jwt';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { User } from '../user/entities/user.entity';
-import { AuditLogService } from '../../../infrastructure/audit/audit-log.service';
+import { AuditLogService } from '../../infrastructure/audit/audit-log.service';
 import { Role } from '../../common/guard/roles.enum';
 import { UnauthorizedException, ForbiddenException, NotFoundException } from '@nestjs/common';
 

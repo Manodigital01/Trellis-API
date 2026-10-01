@@ -4,6 +4,7 @@ import {
   ConflictException,
   BadRequestException,
 } from "@nestjs/common";
+import { PolicyService } from "../policy/policy.service";
 
 export interface TradeRequest {
   idempotencyKey: string;
@@ -38,6 +39,8 @@ export class TradeLockService {
   >();
 
   private tradeCounter = 0;
+
+  constructor(private readonly policyService: PolicyService) {}
 
   async executeTrade(request: TradeRequest): Promise<TradeResult> {
     this.validateRequest(request);
@@ -128,10 +131,14 @@ export class TradeLockService {
       throw new BadRequestException("idempotencyKey is required");
     if (!request.userId) throw new BadRequestException("userId is required");
     if (!request.asset) throw new BadRequestException("asset is required");
-    if (request.amount <= 0)
-      throw new BadRequestException("amount must be positive");
-    if (!["buy", "sell"].includes(request.side))
-      throw new BadRequestException("side must be buy or sell");
+
+    const decision = this.policyService.evaluateTrade(request);
+    if (!decision.allowed && "violation" in decision) {
+      throw new BadRequestException({
+        error: "Policy violation",
+        ...decision.violation,
+      });
+    }
   }
 
   /** Clean up expired idempotency cache entries */

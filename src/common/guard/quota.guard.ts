@@ -1,3 +1,4 @@
+import { createClient, RedisClientType } from "redis";
 import {
   CanActivate,
   ExecutionContext,
@@ -18,6 +19,20 @@ import {
   resolveRateLimitTierFromRole,
 } from "src/config/quota.config";
 
+const MONTHLY_QUOTA_LIMITS: Record<RateLimitTier, number> = {
+  free: 10_000,
+  pro: 1_000_000,
+  enterprise: Number.POSITIVE_INFINITY,
+};
+
+const QUOTA_EXCEEDED_CODE = "QUOTA_EXCEEDED";
+
+function currentMonthKey(date = new Date()): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
 interface RateWindowState {
   count: number;
   resetAt: number;
@@ -36,8 +51,42 @@ export class QuotaGuard implements CanActivate {
   private readonly logger = new Logger(QuotaGuard.name);
   private readonly windows = new Map<string, RateWindowState>();
   private lastCleanupAt = Date.now();
+  private redisClient: RedisClientType | null = null;
+  private redisReady: Promise<RedisClientType | null> | null = null;
 
-  constructor(private readonly reflector: Reflector) {}
+  constructor(private readonly reflector: Reflector) {
+    void this.getRedisClient();
+  }
+
+  private async getRedisClient(): Promise<RedisClientType | null> {
+    if (this.redisClient?.isOpen) {
+      return this.redisClient;
+    }
+
+    if (!this.redisReady) {
+      const url = process.env.REDIS_URL;
+      if (!url) {
+        this.redisReady = Promise.resolve(null);
+      } else {
+        const client = createClient({ url }) as RedisClientType;
+        client.on("error", (err) =>
+          this.logger.error(`Redis quota client error: ${String(err)}`),
+        );
+        this.redisReady = client
+          .connect()
+          .then(() => {
+            this.redisClient = client;
+            return client;
+          })
+          .catch((err) => {
+            this.logger.error(`Failed to connect Redis quota client: ${String(err)}`);
+            return null;
+          });
+      }
+    }
+
+    return this.redisReady;
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const options = this.reflector.getAllAndOverride<RateLimitOptions>(
@@ -52,6 +101,7 @@ export class QuotaGuard implements CanActivate {
     const tracker = this.getTrackerKey(request);
     const scope = this.getScope(request, options);
     const key = `${tracker}:${scope}:${policy.tier}`;
+    const apiKey = this.getApiKey(request);
 
     const decision = this.consume(key, policy.limit, policy.windowMs);
     this.applyHeaders(response, policy, decision.remaining, decision.resetAt);
@@ -70,6 +120,36 @@ export class QuotaGuard implements CanActivate {
       );
     }
 
+    if (apiKey) {
+      const quota = await this.consumeMonthlyQuota(apiKey, policy.tier);
+      this.applyQuotaHeaders(response, quota);
+
+      if (!quota.allowed) {
+        throw new HttpException(
+          {
+            statusCode: HttpStatus.TOO_MANY_REQUESTS,
+            code: QUOTA_EXCEEDED_CODE,
+            message: "Monthly API quota exceeded",
+            limit: quota.limit,
+            remaining: 0,
+            resetAt: quota.resetAt.toISOString(),
+            tier: policy.tier,
+          },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+
+      if (
+        Number.isFinite(quota.limit) &&
+        quota.remaining <= Math.max(1, Math.ceil(quota.limit * 0.1))
+      ) {
+        this.logger.warn(
+          `Approaching monthly quota for ${apiKey} (${policy.tier}): ` +
+            `${quota.limit - quota.remaining}/${quota.limit}`,
+        );
+      }
+    }
+
     if (decision.remaining <= Math.max(1, Math.ceil(policy.limit * 0.1))) {
       this.logger.warn(
         `Approaching rate limit for ${tracker} (${policy.label}): ` +
@@ -78,6 +158,98 @@ export class QuotaGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  private getApiKey(request: {
+    apiKey?: string;
+    headers?: Record<string, unknown>;
+    user?: { apiKey?: string };
+  }): string | null {
+    const headerKey = request.headers?.["x-api-key"];
+    const candidate =
+      request.apiKey ??
+      request.user?.apiKey ??
+      (typeof headerKey === "string" ? headerKey : undefined);
+
+    if (!candidate || typeof candidate !== "string") {
+      return null;
+    }
+
+    return candidate;
+  }
+
+  private async consumeMonthlyQuota(
+    apiKey: string,
+    tier: RateLimitTier,
+  ): Promise<{
+    allowed: boolean;
+    limit: number;
+    remaining: number;
+    resetAt: Date;
+  }> {
+    const limit = MONTHLY_QUOTA_LIMITS[tier] ?? MONTHLY_QUOTA_LIMITS.free;
+    const monthKey = currentMonthKey();
+    const resetAt = new Date(
+      Date.UTC(
+        new Date().getUTCFullYear(),
+        new Date().getUTCMonth() + 1,
+        1,
+        0,
+        0,
+        0,
+        0,
+      ),
+    );
+
+    if (!Number.isFinite(limit)) {
+      return { allowed: true, limit, remaining: Number.POSITIVE_INFINITY, resetAt };
+    }
+
+    const redis = await this.getRedisClient();
+    if (!redis) {
+      return { allowed: true, limit, remaining: limit, resetAt };
+    }
+
+    const redisKey = `quota:${apiKey}:${monthKey}`;
+    const count = await redis.incr(redisKey);
+
+    if (count === 1) {
+      const ttlSeconds = Math.max(
+        1,
+        Math.ceil((resetAt.getTime() - Date.now()) / 1000),
+      );
+      await redis.expire(redisKey, ttlSeconds);
+    }
+
+    const remaining = Math.max(0, limit - count);
+    return {
+      allowed: count <= limit,
+      limit,
+      remaining,
+      resetAt,
+    };
+  }
+
+  private applyQuotaHeaders(
+    response: any,
+    quota: { limit: number; remaining: number; resetAt: Date },
+  ): void {
+    const headers: Array<[string, string | number]> = [
+      ["X-Quota-Limit", quota.limit],
+      [
+        "X-Quota-Remaining",
+        Number.isFinite(quota.remaining) ? quota.remaining : "unlimited",
+      ],
+      ["X-Quota-Reset", quota.resetAt.toISOString()],
+    ];
+
+    for (const [name, value] of headers) {
+      if (typeof response?.header === "function") {
+        response.header(name, value);
+      } else if (typeof response?.setHeader === "function") {
+        response.setHeader(name, value);
+      }
+    }
   }
 
   private resolvePolicy(

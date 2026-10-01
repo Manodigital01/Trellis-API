@@ -1,8 +1,8 @@
 import { Injectable, Logger, NotFoundException, ForbiddenException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { DataExport, ExportStatus, ExportScope } from "./entities/data-export.entity";
-import { CreateExportDto, ExportScope as ExportScopeEnum } from "./dto/export.dto";
+import { DataExport, ExportStatus } from "./entities/data-export.entity";
+import { CreateExportDto, ExportScope } from "./dto/export.dto";
 
 @Injectable()
 export class ExportService {

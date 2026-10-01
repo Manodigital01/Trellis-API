@@ -29,6 +29,7 @@ This inventory covers every top-level directory currently under `src/`.
 | `observability` | tracing and instrumentation | `app.module.ts` |
 | `payments` | payment processor adapters and Stellar Horizon path | billing, `app.module.ts` |
 | `portfolio` | separate placeholder rebalancing controller and service | its own module; not imported by `app.module.ts` |
+| `preflight` | deterministic pre-submission evaluation of high-risk operations | callers of payments, trading and oracle flows; `app.module.ts` |
 | `profiling` | request and performance profiling | `app.module.ts` |
 | `rate-limiting` | distributed request limits | `app.module.ts`, auth guards |
 | `reconciliation` | ledger and invoice reconciliation | payments, `app.module.ts` |

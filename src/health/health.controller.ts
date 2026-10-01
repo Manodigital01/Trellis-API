@@ -22,7 +22,7 @@ import { HealthService } from "./health.service";
 export class HealthController {
   constructor(private readonly healthService: HealthService) {}
 
-  @Get("live")
+  @Get(["liveness", "live"])
   @ApiOperation({
     summary: "Liveness probe",
     description:
@@ -39,11 +39,11 @@ export class HealthController {
     return this.healthService.getLiveness();
   }
 
-  @Get("ready")
+  @Get(["readiness", "ready"])
   @ApiOperation({
     summary: "Readiness probe",
     description:
-      "Kubernetes readiness probe. Checks database and Redis connectivity. " +
+      "Kubernetes readiness probe. Checks database, Redis, and downstream connectivity. " +
       "Returns 200 when all dependencies are reachable, 503 when any critical dependency is down.",
     operationId: "getHealthReady",
   })

@@ -106,6 +106,8 @@ export interface TransactionData {
   data: string;
   gasLimit?: string;
   gasPrice?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
   nonce?: number;
 }
 

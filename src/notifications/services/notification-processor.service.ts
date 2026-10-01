@@ -3,9 +3,9 @@ import { Logger } from '@nestjs/common';
 import { Job } from 'bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Notification, NotificationChannel, NotificationStatus } from '../entities/notification.entity';
+import { Notification, NotificationChannel, NotificationStatus, NotificationPriority, NotificationCategory } from '../entities/notification.entity';
 import { NotificationDeliveryLog, DeliveryStatus } from '../entities/notification-delivery-log.entity';
-import { NotificationPreference, NotificationChannelPreference } from '../entities/notification-preference.entity';
+import { NotificationPreference, NotificationChannelPreference, NotificationDeliveryMode } from '../entities/notification-preference.entity';
 import { NotificationChannelProvider } from '../providers/notification-channel.interface';
 
 interface NotificationJobData {
@@ -76,6 +76,18 @@ export class NotificationProcessor {
         this.logger.debug(
           `Skipping ${channel} for user ${notification.userId}: channel disabled`,
         );
+        continue;
+      }
+
+      // Routine notifications are collected by NotificationDigestService. A
+      // generated digest is explicitly marked so it can pass through here.
+      const isCritical = notification.priority === NotificationPriority.CRITICAL ||
+        notification.category === NotificationCategory.SECURITY;
+      const digestMode = preference?.deliveryMode === NotificationDeliveryMode.DAILY_DIGEST ||
+        preference?.deliveryMode === NotificationDeliveryMode.WEEKLY_SUMMARY ||
+        preference?.preference === NotificationChannelPreference.DIGEST;
+      if (digestMode && !isCritical && !notification.metadata?.isDigest) {
+        await this.notificationRepo.update(notificationId, { status: NotificationStatus.SCHEDULED });
         continue;
       }
 

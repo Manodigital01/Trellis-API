@@ -1,7 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
-import { JobStatus, WorkerJob, RetryPolicy, DEFAULT_RETRY_POLICY, WorkerJobPayload } from "./worker.interface";
+import { JobStatus, JobPriority, WorkerJob, RetryPolicy, DEFAULT_RETRY_POLICY, WorkerJobPayload } from "./worker.interface";
+import { JobStatus, WorkerJob, RetryPolicy, DEFAULT_RETRY_POLICY, WorkerJobPayload, JobPriority } from "./worker.interface";
+import {
+  withTraceContext,
+  runTracedJob,
+  extractJobContext,
+} from "src/observability/async-job-tracing";
 
 @Injectable()
 export class BackgroundWorkerService implements OnModuleInit {
@@ -9,7 +15,11 @@ export class BackgroundWorkerService implements OnModuleInit {
   private readonly jobStore = new Map<string, WorkerJob>();
   private readonly policies = new Map<string, RetryPolicy>();
 
-  constructor(@InjectQueue("background-jobs") private readonly queue: Queue) {}
+  constructor(@InjectQueue("background-jobs") private readonly queue: Queue) {
+    // Register default policies eagerly so they exist even when the module
+    // is instantiated outside the Nest lifecycle (e.g. in unit tests).
+    this.registerDefaultPolicies();
+  }
 
   onModuleInit() {
     this.registerDefaultPolicies();
@@ -18,10 +28,10 @@ export class BackgroundWorkerService implements OnModuleInit {
 
   private registerDefaultPolicies() {
     const defaults: Record<string, Partial<RetryPolicy>> = {
-      webhook.delivery: { maxAttempts: 5, backoffMs: 2000, backoffMultiplier: 2, maxBackoffMs: 60000 },
-      email.send: { maxAttempts: 3, backoffMs: 1000, backoffMultiplier: 2, maxBackoffMs: 30000 },
-      data.export: { maxAttempts: 2, backoffMs: 5000, maxBackoffMs: 60000 },
-      reconciliation.sync: { maxAttempts: 4, backoffMs: 3000, backoffMultiplier: 1.5, maxBackoffMs: 120000 },
+      "webhook.delivery": { maxAttempts: 5, backoffMs: 2000, backoffMultiplier: 2, maxBackoffMs: 60000 },
+      "email.send": { maxAttempts: 3, backoffMs: 1000, backoffMultiplier: 2, maxBackoffMs: 30000 },
+      "data.export": { maxAttempts: 2, backoffMs: 5000, maxBackoffMs: 60000 },
+      "reconciliation.sync": { maxAttempts: 4, backoffMs: 3000, backoffMultiplier: 1.5, maxBackoffMs: 120000 },
     };
 
     for (const [type, policy] of Object.entries(defaults)) {
@@ -80,7 +90,9 @@ export class BackgroundWorkerService implements OnModuleInit {
 
     const bullJob = await this.queue.add(
       type,
-      { ...payload.payload, _jobId: id, _schemaVersion: "1.0.0" },
+      // Stamp the active W3C trace context so the worker-side processing
+      // span is parented to the originating HTTP request span.
+      withTraceContext({ ...payload.payload, _jobId: id, _schemaVersion: "1.0.0" }),
       {
         jobId: id,
         priority: this.mapPriority(payload.priority || JobPriority.NORMAL),
@@ -95,11 +107,9 @@ export class BackgroundWorkerService implements OnModuleInit {
       },
     );
 
-    this.updateJobStatus(id, JobStatus.ACTIVE);
     this.logger.log(`Enqueued job ${id} of type ${type}`);
     return job;
   }
-
   async getJob(id: string): Promise<WorkerJob | undefined> {
     return this.jobStore.get(id);
   }
@@ -129,7 +139,11 @@ export class BackgroundWorkerService implements OnModuleInit {
 
     await this.queue.add(
       job.type,
-      { ...job.payload, _jobId: job.id, _schemaVersion: job.schemaVersion, _retry: true },
+      withTraceContext(
+        { ...job.payload, _jobId: job.id, _schemaVersion: job.schemaVersion, _retry: true },
+        // Preserve the ORIGINAL request trace across retries.
+        extractJobContext({ __trace: (job.payload as { __trace?: object })?.__trace }) as never,
+      ),
       {
         jobId: job.id,
         priority: this.mapPriority(job.priority),
@@ -152,7 +166,11 @@ export class BackgroundWorkerService implements OnModuleInit {
       return false;
     }
 
-    await this.queue.remove(job.id);
+    const bullJob = await this.queue.getJob(job.id);
+    if (bullJob) {
+      await bullJob.remove();
+    }
+    await (this.queue as any).remove(job.id);
     job.status = JobStatus.FAILED;
     job.updatedAt = new Date();
     job.error = "Cancelled by user";

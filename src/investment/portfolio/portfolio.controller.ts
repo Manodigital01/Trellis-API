@@ -104,6 +104,21 @@ export class PortfolioController {
     return this.portfolioService.deletePortfolio(portfolioId);
   }
 
+  @Post("portfolios/:id/transition")
+  @ApiOperation({ summary: "Execute a guarded lifecycle state transition on a portfolio" })
+  @UseGuards(PortfolioOwnerGuard)
+  async transitionPortfolio(
+    @Param("id") portfolioId: string,
+    @Body() dto: { targetState: string; reason?: string },
+    @Request() req: any,
+  ) {
+    return this.portfolioService.transitionPortfolioState(portfolioId, dto.targetState, {
+      actorId: req.user?.id,
+      actorRole: req.user?.role,
+      reason: dto.reason,
+    });
+  }
+
   // Holding Management Endpoints
 
   @Post("portfolios/:portfolioId/holdings")

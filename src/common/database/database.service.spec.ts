@@ -99,6 +99,20 @@ describe("DatabaseService", () => {
     });
   });
 
+  describe("getPoolUsage", () => {
+    it("reports pool utilization from the TypeORM pool", () => {
+      (dataSource as any).driver = {
+        pool: { size: 10, available: 1, options: { max: 10 } },
+      };
+      expect(service.getPoolUsage()).toEqual({
+        activeConnections: 9,
+        idleConnections: 1,
+        maxConnections: 10,
+        utilization: 0.9,
+      });
+    });
+  });
+
   describe("runMigration", () => {
     it("runs migration successfully", async () => {
       dataSource.createQueryRunner = jest.fn().mockReturnValue({

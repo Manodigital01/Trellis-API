@@ -14,6 +14,7 @@ import { S3StorageBackend } from "../storage/s3-storage.backend";
 import { AzureBlobStorageBackend } from "../storage/azure-blob-storage.backend";
 import { FileStorageBackend } from "../entities/uploaded-file.entity";
 import { FileCleanupDto } from "../dto/file-upload.dto";
+import { DistributedLock } from "../../distributed-lock/distributed-lock.decorator";
 
 export interface CleanupResult {
   filesScanned: number;
@@ -60,6 +61,7 @@ export class FileCleanupService {
    * Run cleanup every day at 2 AM.
    */
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  @DistributedLock("file-upload:orphan-cleanup", 30 * 60_000)
   async scheduledCleanup(): Promise<CleanupResult> {
     if (!this.cleanupEnabled) {
       this.logger.debug("File cleanup is disabled, skipping scheduled run");
