@@ -7,6 +7,7 @@ export enum ErrorDomain {
   BLOCKCHAIN = "blockchain",
   PORTFOLIO = "portfolio",
   RATE_LIMIT = "rate_limit",
+  QUOTA = "quota",
   SYSTEM = "system",
 }
 
@@ -18,6 +19,7 @@ export enum ErrorCode {
   DEPENDENCY_TIMEOUT = "DEPENDENCY_TIMEOUT",
   NOT_FOUND = "NOT_FOUND",
   RATE_LIMITED = "RATE_LIMITED",
+  QUOTA_EXCEEDED = "QUOTA_EXCEEDED",
 
   // Validation
   VALIDATION_ERROR = "VALIDATION_ERROR",
